@@ -486,21 +486,12 @@ async function summarizeSession(session, areaId, btnId){
 ${fullText.slice(0,8000)}`;
 
   try{
-    const res=await fetch('https://api.anthropic.com/v1/messages',{
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({
-        model:'claude-sonnet-4-6',
-        max_tokens:1000,
-        messages:[{role:'user',content:prompt}]
-      })
-    });
-    // Gemini API 사용
     const gRes=await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent?key=${key}`,{
       method:'POST',
       headers:{'Content-Type':'application/json'},
       body:JSON.stringify({contents:[{parts:[{text:prompt}]}]})
     });
+    if(!gRes.ok){const errData=await gRes.json();throw new Error(errData.error?.message||'API 오류 '+gRes.status);}
     const gData=await gRes.json();
     const summary=gData.candidates?.[0]?.content?.parts?.[0]?.text||'요약 실패';
     area.innerHTML='<div class="summary-box">'+summary.replace(/</g,'&lt;').replace(/\n/g,'<br>')+'</div>';
