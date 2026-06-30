@@ -97,6 +97,18 @@
   .modal-body { overflow-y: auto; padding: 1rem; flex: 1; -webkit-overflow-scrolling: touch; }
   .modal-actions { padding: 0.75rem 1rem; border-top: 0.5px solid #2a2a2a; display: flex; gap: 8px; flex-shrink: 0; }
   .modal-actions button { flex: 1; }
+  .modal-title-input { font-size: 15px; font-weight: 600; background: #2c2c2e; border: 0.5px solid #0a84ff; border-radius: 6px; color: #f0f0f0; padding: 4px 8px; flex: 1; outline: none; }
+  .modal-edit-btn { font-size: 12px; color: #0a84ff; background: transparent; border: 0.5px solid #0a84ff44; border-radius: 6px; padding: 4px 10px; cursor: pointer; white-space: nowrap; }
+  .modal-edit-btn.active { background: #0a84ff; color: #fff; border-color: #0a84ff; }
+  .hidden { display: none !important; }
+  .para .pt[contenteditable="true"] { outline: 1px dashed #0a84ff66; border-radius: 4px; padding: 2px 4px; cursor: text; }
+  .para-del { display: none; font-size: 11px; color: #ff453a; background: transparent; border: 0.5px solid #ff453a44; border-radius: 5px; padding: 1px 7px; cursor: pointer; margin-left: 8px; vertical-align: middle; }
+  .edit-mode .para-del { display: inline; }
+  .edit-save-bar { display: none; padding: 0.6rem 1rem; gap: 8px; border-top: 0.5px solid #2a2a2a; }
+  .edit-save-bar.show { display: flex; }
+  .edit-save-bar button { flex: 1; }
+  .btn-save-edit { background: #0a84ff; color: #fff; }
+  .btn-cancel-edit { background: transparent; color: #888; border: 0.5px solid #444; }
 
   @media (max-width: 599px) {
     .settings { flex-direction: column; }
@@ -198,12 +210,20 @@
   <div class="modal">
     <div class="modal-header">
       <span class="modal-title" id="modalTitle"></span>
-      <button class="modal-close" onclick="closeModal()">닫기</button>
+      <input class="modal-title-input hidden" id="modalTitleInput" type="text" />
+      <div style="display:flex;gap:6px;align-items:center;">
+        <button class="modal-edit-btn" id="modalEditBtn" onclick="toggleEditMode()">✏️ 수정</button>
+        <button class="modal-close" onclick="closeModal()">닫기</button>
+      </div>
     </div>
     <div class="modal-body" id="modalBody"></div>
     <div class="modal-actions">
       <button class="action-btn btn-summarize" id="modalSumBtn" onclick="summarizeModal()">AI 요약</button>
       <button class="action-btn btn-download" onclick="downloadModal()">📥 다운로드</button>
+    </div>
+    <div class="edit-save-bar" id="editSaveBar">
+      <button class="btn-cancel-edit" onclick="cancelEdit()">취소</button>
+      <button class="btn-save-edit" onclick="saveEdit()">변경사항 저장</button>
     </div>
   </div>
 </div>
@@ -507,20 +527,38 @@ ${fullText.slice(0,8000)}`;
 function summarizeCurrent(){summarizeSession(currentSession,'summaryArea','summarizeBtn');}
 
 // ── 모달 ──
+let editMode = false;
+
 function openModal(id){
   const session=getSessions().find(s=>s.id===id);
   if(!session)return;
   modalSession=session;
+  editMode = false;
+  renderModalBody();
+  document.getElementById('modalOverlay').classList.remove('hidden');
+  document.getElementById('editSaveBar').classList.remove('show');
+  document.getElementById('modalEditBtn').classList.remove('active');
+  document.getElementById('modalEditBtn').textContent='✏️ 수정';
+}
+
+function renderModalBody(){
+  const session=modalSession;
   const[dst,src]=session.lang.split('|');
+
   document.getElementById('modalTitle').textContent=session.name;
+  document.getElementById('modalTitle').classList.remove('hidden');
+  document.getElementById('modalTitleInput').classList.add('hidden');
+  document.getElementById('modalTitleInput').value=session.name;
+
   const body=document.getElementById('modalBody');
+  body.className = editMode ? 'edit-mode' : '';
   body.innerHTML='<div style="font-size:12px;color:#555;margin-bottom:12px;">'+session.startTimeStr+' · '+(langName[src]||src)+' → '+(langName[dst]||dst)+'</div>';
 
-  // 원문/번역 표시
+  // 원문/번역 표시 (data-type, data-idx로 편집 시 추적)
   const maxLen=Math.max(session.src.length,session.dst.length);
   for(let i=0;i<maxLen;i++){
-    if(session.src[i]) body.innerHTML+='<div class="para"><span class="ts">'+session.src[i].time+'</span><span class="pt">'+session.src[i].text+'</span></div>';
-    if(session.dst[i]) body.innerHTML+='<div class="para ko"><span class="ts">'+session.dst[i].time+'</span><span class="pt">'+session.dst[i].text+'</span></div>';
+    if(session.src[i]) body.innerHTML+=renderPara('src', i, session.src[i], '');
+    if(session.dst[i]) body.innerHTML+=renderPara('dst', i, session.dst[i], 'ko');
   }
 
   // 기존 요약 있으면 표시
@@ -530,8 +568,87 @@ function openModal(id){
   } else {
     body.innerHTML+='<div id="modalSummaryArea"></div>';
   }
+}
 
-  document.getElementById('modalOverlay').classList.remove('hidden');
+function renderPara(type, idx, item, cls){
+  const editable = editMode ? 'true' : 'false';
+  return '<div class="para'+(cls?' '+cls:'')+'" data-type="'+type+'" data-idx="'+idx+'">'
+    +'<span class="ts">'+item.time+'</span>'
+    +'<button class="para-del" onclick="deletePara(this)">삭제</button><br>'
+    +'<span class="pt" contenteditable="'+editable+'">'+item.text+'</span>'
+    +'</div>';
+}
+
+function toggleEditMode(){
+  if(!modalSession)return;
+  editMode = !editMode;
+  renderModalBody();
+  const btn=document.getElementById('modalEditBtn');
+  const titleSpan=document.getElementById('modalTitle');
+  const titleInput=document.getElementById('modalTitleInput');
+  const saveBar=document.getElementById('editSaveBar');
+  if(editMode){
+    btn.textContent='편집 중'; btn.classList.add('active');
+    titleSpan.classList.add('hidden');
+    titleInput.classList.remove('hidden');
+    titleInput.value=modalSession.name;
+    saveBar.classList.add('show');
+  } else {
+    btn.textContent='✏️ 수정'; btn.classList.remove('active');
+    saveBar.classList.remove('show');
+  }
+}
+
+function deletePara(btnEl){
+  if(!confirm('이 문단을 삭제하시겠습니까?'))return;
+  const paraEl = btnEl.closest('.para');
+  paraEl.remove();
+}
+
+function saveEdit(){
+  if(!modalSession)return;
+  const session = modalSession;
+  const titleInput = document.getElementById('modalTitleInput');
+  const newName = titleInput.value.trim();
+  if(newName) session.name = newName;
+
+  // 본문에 남아있는 .para들을 다시 src/dst 배열로 재구성
+  const body = document.getElementById('modalBody');
+  const newSrc = [], newDst = [];
+  body.querySelectorAll('.para').forEach(p=>{
+    const type = p.dataset.type;
+    const time = p.querySelector('.ts').textContent;
+    const text = p.querySelector('.pt').textContent.trim();
+    if(!text) return;
+    if(type==='src') newSrc.push({time, text});
+    else newDst.push({time, text});
+  });
+  session.src = newSrc;
+  session.dst = newDst;
+
+  // localStorage 갱신
+  const sessions = getSessions();
+  const idx = sessions.findIndex(s=>s.id===session.id);
+  if(idx>=0){ sessions[idx]=session; setSessions(sessions); }
+
+  editMode=false;
+  document.getElementById('editSaveBar').classList.remove('show');
+  document.getElementById('modalEditBtn').textContent='✏️ 수정';
+  document.getElementById('modalEditBtn').classList.remove('active');
+  renderModalBody();
+  renderSessionList();
+
+  const btn=document.getElementById('modalEditBtn');
+  btn.textContent='✅ 저장됨';
+  setTimeout(()=>{btn.textContent='✏️ 수정';},1200);
+}
+
+function cancelEdit(){
+  editMode=false;
+  document.getElementById('editSaveBar').classList.remove('show');
+  document.getElementById('modalEditBtn').textContent='✏️ 수정';
+  document.getElementById('modalEditBtn').classList.remove('active');
+  renderModalBody();
 }
 
 function summarizeModal(){
@@ -542,6 +659,7 @@ function summarizeModal(){
 function closeModal(){
   document.getElementById('modalOverlay').classList.add('hidden');
   modalSession=null;
+  editMode=false;
 }
 function closeModalOutside(e){if(e.target===document.getElementById('modalOverlay'))closeModal();}
 </script>
