@@ -143,6 +143,8 @@
     <div class="sg">
       <label>번역 방향</label>
       <select id="targetLang">
+        <option value="ko|auto">🌐 자동감지 → 한국어</option>
+        <option value="en|auto">🌐 자동감지 → 영어</option>
         <option value="ko|en">영어 → 한국어</option>
         <option value="en|ko">한국어 → 영어</option>
         <option value="ko|ja">일본어 → 한국어</option>
@@ -296,7 +298,8 @@ function appendText(boxId, text, cls, timerRef, storeArr){
 function updateLabels(){
   const val=document.getElementById('targetLang').value;
   const[dst,src]=val.split('|');
-  document.getElementById('srcLabel').textContent='원문 ('+(langName[src]||src)+')';
+  const srcLabel = src==='auto' ? '자동감지 (다국어)' : (langName[src]||src);
+  document.getElementById('srcLabel').textContent='원문 ('+srcLabel+')';
   document.getElementById('dstLabel').textContent='번역 ('+(langName[dst]||dst)+')';
 }
 document.getElementById('targetLang').addEventListener('change',updateLabels);
@@ -350,7 +353,11 @@ async function startTranslation(){
   ws=new WebSocket('wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key='+key);
   ws.binaryType='blob';
   ws.onopen=()=>{
-    ws.send(JSON.stringify({setup:{model:'models/gemini-3.5-live-translate-preview',generationConfig:{responseModalities:['AUDIO'],translationConfig:{targetLanguageCode:targetLang,echoTargetLanguage:false}}}}));
+    const[targetLang, srcLang]=document.getElementById('targetLang').value.split('|');
+    const transConfig = srcLang==='auto'
+      ? {targetLanguageCode:targetLang, echoTargetLanguage:false}
+      : {targetLanguageCode:targetLang, echoTargetLanguage:false};
+    ws.send(JSON.stringify({setup:{model:'models/gemini-3.5-live-translate-preview',generationConfig:{responseModalities:['AUDIO'],translationConfig:transConfig}}}));
     setStatus('connected','연결됨');
     document.getElementById('stopBtn').disabled=false;
     actx=new(window.AudioContext||window.webkitAudioContext)({sampleRate:SR});
