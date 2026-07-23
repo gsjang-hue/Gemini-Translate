@@ -451,22 +451,53 @@ async function startTranslation(){
   const sessionName=document.getElementById('sessionName').value.trim()||('세션 '+dateStr());
   updateLabels();
 
-  // 전역 저장 (재연결용)
-  currentKey=key;
-  currentTargetLang=targetLang;
-  currentSessionName=sessionName;
-  resumptionHandle=null;
-
-  // 세션 초기화
-  currentSession={
-    name: sessionName,
-    startTime: new Date().toISOString(),
-    startTimeStr: dateStr(),
-    lang: document.getElementById('targetLang').value,
-    src:[], dst:[], summary:''
-  };
-  updateCurrentCard();
-  updateCtrlSession();
+  // 기존 세션 데이터가 있으면 이어서 할지 묻기
+  const hasExisting = currentSession && (currentSession.src.length > 0 || currentSession.dst.length > 0);
+  if(hasExisting){
+    const cont = confirm(
+      '기존 세션 "' + currentSession.name + '"에 내용이 있습니다.\n\n' +
+      '확인: 기존 세션에 이어서 기록\n취소: 새 세션으로 시작'
+    );
+    if(cont){
+      // 이어서: currentSession 유지, 화면 내용도 유지
+      currentKey=key;
+      currentTargetLang=targetLang;
+      currentSessionName=currentSession.name;
+      resumptionHandle=null;
+    } else {
+      // 새 세션: 초기화
+      currentKey=key;
+      currentTargetLang=targetLang;
+      currentSessionName=sessionName;
+      resumptionHandle=null;
+      currentSession={
+        name: sessionName,
+        startTime: new Date().toISOString(),
+        startTimeStr: dateStr(),
+        lang: document.getElementById('targetLang').value,
+        src:[], dst:[], summary:''
+      };
+      document.getElementById('srcBox').innerHTML='';
+      document.getElementById('dstBox').innerHTML='';
+      updateCurrentCard();
+      updateCtrlSession();
+    }
+  } else {
+    // 처음 시작
+    currentKey=key;
+    currentTargetLang=targetLang;
+    currentSessionName=sessionName;
+    resumptionHandle=null;
+    currentSession={
+      name: sessionName,
+      startTime: new Date().toISOString(),
+      startTimeStr: dateStr(),
+      lang: document.getElementById('targetLang').value,
+      src:[], dst:[], summary:''
+    };
+    updateCurrentCard();
+    updateCtrlSession();
+  }
 
   // 설정 패널 자동 닫기
   const panel=document.getElementById('settingsPanel');
