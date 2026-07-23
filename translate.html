@@ -24,15 +24,15 @@
   .page.active { display: flex; }
 
   /* ── 번역 탭 ── */
-  .settings { padding: 0.6rem 1rem; border-bottom: 0.5px solid #2a2a2a; display: flex; gap: 8px; align-items: flex-end; flex-wrap: wrap; flex-shrink: 0; }
-  .sg { display: flex; flex-direction: column; gap: 3px; }
-  .sg label { font-size: 11px; color: #555; }
-  input[type="password"], input[type="text"] { background: #1c1c1e; border: 0.5px solid #444; border-radius: 8px; color: #f0f0f0; font-size: 14px; padding: 7px 10px; outline: none; }
-  input[type="password"] { width: 180px; }
-  .session-input { width: 160px; }
-  select { background: #1c1c1e; border: 0.5px solid #444; border-radius: 8px; color: #f0f0f0; font-size: 14px; padding: 7px 10px; outline: none; -webkit-appearance: none; }
-  .btns { display: flex; gap: 7px; margin-left: auto; align-items: flex-end; }
-  button { padding: 8px 14px; font-size: 13px; font-weight: 500; border-radius: 8px; border: none; cursor: pointer; white-space: nowrap; -webkit-tap-highlight-color: transparent; }
+  .settings { padding: 0.4rem 0.8rem; border-bottom: 0.5px solid #2a2a2a; display: flex; gap: 6px; align-items: center; flex-wrap: nowrap; flex-shrink: 0; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .sg { display: flex; flex-direction: column; gap: 2px; flex-shrink: 0; }
+  .sg label { font-size: 10px; color: #555; }
+  input[type="password"], input[type="text"] { background: #1c1c1e; border: 0.5px solid #444; border-radius: 7px; color: #f0f0f0; font-size: 13px; padding: 5px 8px; outline: none; }
+  input[type="password"] { width: 130px; }
+  .session-input { width: 110px; }
+  select { background: #1c1c1e; border: 0.5px solid #444; border-radius: 7px; color: #f0f0f0; font-size: 13px; padding: 5px 8px; outline: none; -webkit-appearance: none; max-width: 160px; }
+  .btns { display: flex; gap: 5px; align-items: center; flex-shrink: 0; margin-left: 4px; }
+  button { padding: 6px 12px; font-size: 13px; font-weight: 500; border-radius: 7px; border: none; cursor: pointer; white-space: nowrap; -webkit-tap-highlight-color: transparent; }
   #startBtn { background: #0a84ff; color: #fff; }
   #startBtn:disabled { background: #1a3a5c; color: #555; }
   #stopBtn { background: transparent; color: #ff453a; border: 0.5px solid #ff453a; }
@@ -198,6 +198,9 @@
         <button class="action-btn btn-save" onclick="saveCurrentSession()">💾 저장</button>
       </div>
       <div id="summaryArea"></div>
+      <div id="summaryCopyRow" style="display:none; margin-top:8px;">
+        <button class="copy-btn" id="copySummaryBtn" onclick="copySummary('summaryArea','copySummaryBtn')">요약 복사 (Plain Text)</button>
+      </div>
     </div>
 
     <!-- 저장된 세션 목록 -->
@@ -221,6 +224,7 @@
     <div class="modal-body" id="modalBody"></div>
     <div class="modal-actions">
       <button class="action-btn btn-summarize" id="modalSumBtn" onclick="summarizeModal()">AI 요약</button>
+      <button class="copy-btn" id="copyModalSumBtn" onclick="copySummary('modalSummaryArea','copyModalSumBtn')" style="padding:8px 12px;">요약 복사</button>
       <button class="action-btn btn-download" onclick="downloadModal()">📥 다운로드</button>
     </div>
     <div class="edit-save-bar" id="editSaveBar">
@@ -314,16 +318,92 @@ async function copyCol(boxId,btnId){
 function f32i16(buf){const o=new Int16Array(buf.length);for(let i=0;i<buf.length;i++){const s=Math.max(-1,Math.min(1,buf[i]));o[i]=s<0?s*0x8000:s*0x7FFF;}return o;}
 function b64(i16){const b=new Uint8Array(i16.buffer);let s='';for(let i=0;i<b.length;i++)s+=String.fromCharCode(b[i]);return btoa(s);}
 
+let resumptionHandle = null; // GoAway 후 재연결용 핸들
+let isReconnecting = false;
+let currentKey = '';
+let currentTargetLang = '';
+let currentSessionName = '';
+
 async function parse(e){
   let txt=typeof e.data==='string'?e.data:(e.data instanceof Blob?await e.data.text():new TextDecoder().decode(e.data));
   try{
-    const d=JSON.parse(txt);const sc=d.serverContent;if(!sc)return;
+    const d=JSON.parse(txt);
+
+    // 세션 재개 핸들 저장 (GoAway 대비)
+    if(d.sessionResumptionUpdate?.newHandle){
+      resumptionHandle = d.sessionResumptionUpdate.newHandle;
+    }
+
+    // GoAway 감지 → 자동 재연결
+    if(d.goAway){
+      const timeLeft = d.goAway.timeLeft || '알 수 없음';
+      setStatus('connected', '재연결 중... (세션 갱신)');
+      setTimeout(()=>reconnectSession(), 500);
+      return;
+    }
+
+    const sc=d.serverContent;if(!sc)return;
     const srcArr=currentSession?currentSession.src:null;
     const dstArr=currentSession?currentSession.dst:null;
     if(sc.inputTranscription?.text) appendText('srcBox',sc.inputTranscription.text,'',srcTimer_,srcArr);
     if(sc.outputTranscription?.text) appendText('dstBox',sc.outputTranscription.text,'ko',dstTimer_,dstArr);
     (sc.modelTurn?.parts||[]).forEach(p=>{if(p.text)appendText('dstBox',p.text,'ko',dstTimer_,dstArr);});
   }catch(_){}
+}
+
+function connectWebSocket(key, targetLang, sessionName, handle){
+  const url='wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key='+key;
+  ws=new WebSocket(url);
+  ws.binaryType='blob';
+
+  ws.onopen=()=>{
+    const[tLang]=document.getElementById('targetLang').value.split('|');
+    const setup = {
+      model:'models/gemini-3.5-live-translate-preview',
+      generationConfig:{
+        responseModalities:['AUDIO'],
+        translationConfig:{targetLanguageCode:tLang, echoTargetLanguage:false},
+        contextWindowCompression:{ slidingWindow:{} }  // 무제한 세션
+      }
+    };
+    // 재연결 시 핸들 포함
+    if(handle) setup.sessionResumption = {handle};
+    else setup.sessionResumption = {};  // 첫 연결 시 활성화만
+
+    ws.send(JSON.stringify({setup}));
+    setStatus('recording','녹음 중 — '+sessionName);
+    document.getElementById('stopBtn').disabled=false;
+
+    // 마이크 프로세서가 없으면 새로 연결
+    if(!proc && actx && stream){
+      const src=actx.createMediaStreamSource(stream);
+      proc=actx.createScriptProcessor(2048,1,1);
+      proc.onaudioprocess=ev=>{if(!ws||ws.readyState!==1)return;ws.send(JSON.stringify({realtimeInput:{audio:{data:b64(f32i16(ev.inputBuffer.getChannelData(0))),mimeType:'audio/pcm;rate=16000'}}}));};
+      src.connect(proc);proc.connect(actx.destination);
+    }
+    isReconnecting=false;
+  };
+
+  ws.onmessage=ev=>parse(ev);
+  ws.onerror=()=>{ if(!isReconnecting){showErr('연결 오류.');cleanup();} };
+  ws.onclose=ev=>{
+    if(ev.code===1000||isReconnecting) return;
+    // 예상치 못한 끊김 → 3초 후 자동 재연결 시도
+    if(currentKey && currentSession){
+      setStatus('','재연결 시도 중...');
+      setTimeout(()=>reconnectSession(), 3000);
+    } else {
+      showErr('연결 끊김 ('+ev.code+') '+(ev.reason||''));
+      cleanup();
+    }
+  };
+}
+
+function reconnectSession(){
+  if(!currentKey || !currentSession) return;
+  isReconnecting=true;
+  if(ws){try{ws.close(1000);}catch(_){} ws=null;}
+  connectWebSocket(currentKey, currentTargetLang, currentSessionName, resumptionHandle);
 }
 
 async function startTranslation(){
@@ -333,6 +413,12 @@ async function startTranslation(){
   const[targetLang]=document.getElementById('targetLang').value.split('|');
   const sessionName=document.getElementById('sessionName').value.trim()||('세션 '+dateStr());
   updateLabels();
+
+  // 전역 저장 (재연결용)
+  currentKey=key;
+  currentTargetLang=targetLang;
+  currentSessionName=sessionName;
+  resumptionHandle=null;
 
   // 세션 초기화
   currentSession={
@@ -347,29 +433,15 @@ async function startTranslation(){
   try{stream=await navigator.mediaDevices.getUserMedia({audio:{sampleRate:SR,channelCount:1,echoCancellation:true,noiseSuppression:true},video:false});}
   catch(err){showErr('마이크 권한 필요: '+err.message);return;}
 
+  actx=new(window.AudioContext||window.webkitAudioContext)({sampleRate:SR});
+  const src=actx.createMediaStreamSource(stream);
+  proc=actx.createScriptProcessor(2048,1,1);
+  proc.onaudioprocess=ev=>{if(!ws||ws.readyState!==1)return;ws.send(JSON.stringify({realtimeInput:{audio:{data:b64(f32i16(ev.inputBuffer.getChannelData(0))),mimeType:'audio/pcm;rate=16000'}}}));};
+  src.connect(proc);proc.connect(actx.destination);
+
   setStatus('','연결 중...');
   document.getElementById('startBtn').disabled=true;
-
-  ws=new WebSocket('wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key='+key);
-  ws.binaryType='blob';
-  ws.onopen=()=>{
-    const[targetLang, srcLang]=document.getElementById('targetLang').value.split('|');
-    const transConfig = srcLang==='auto'
-      ? {targetLanguageCode:targetLang, echoTargetLanguage:false}
-      : {targetLanguageCode:targetLang, echoTargetLanguage:false};
-    ws.send(JSON.stringify({setup:{model:'models/gemini-3.5-live-translate-preview',generationConfig:{responseModalities:['AUDIO'],translationConfig:transConfig}}}));
-    setStatus('connected','연결됨');
-    document.getElementById('stopBtn').disabled=false;
-    actx=new(window.AudioContext||window.webkitAudioContext)({sampleRate:SR});
-    const src=actx.createMediaStreamSource(stream);
-    proc=actx.createScriptProcessor(2048,1,1);
-    proc.onaudioprocess=ev=>{if(!ws||ws.readyState!==1)return;ws.send(JSON.stringify({realtimeInput:{audio:{data:b64(f32i16(ev.inputBuffer.getChannelData(0))),mimeType:'audio/pcm;rate=16000'}}}));};
-    src.connect(proc);proc.connect(actx.destination);
-    setStatus('recording','녹음 중 — '+sessionName);
-  };
-  ws.onmessage=ev=>parse(ev);
-  ws.onerror=()=>{showErr('연결 오류.');cleanup();};
-  ws.onclose=ev=>{if(ev.code!==1000)showErr('연결 끊김 ('+ev.code+') '+(ev.reason||''));cleanup();};
+  connectWebSocket(key, targetLang, sessionName, null);
 }
 
 function cleanup(){
@@ -492,6 +564,38 @@ function downloadModal(){
   downloadSession(modalSession);
 }
 
+// 마크다운 → Plain Text 변환 후 복사
+async function copySummary(areaId, btnId){
+  const area=document.getElementById(areaId);
+  if(!area){return;}
+  const box=area.querySelector('.summary-box');
+  if(!box){alert('요약 내용이 없습니다.');return;}
+  // innerHTML의 <br>을 줄바꿈으로, 나머지 태그 제거
+  let raw=box.innerHTML.replace(/<br\s*\/?>/gi,'\n').replace(/<[^>]+>/g,'');
+  // HTML 엔티티 디코딩
+  const ta=document.createElement('textarea');
+  ta.innerHTML=raw; raw=ta.value;
+  // 마크다운 기호 제거
+  let plain=raw
+    .replace(/^#{1,6}\s*/gm,'')          // ## 헤더
+    .replace(/\*\*(.*?)\*\*/g,'$1')       // **bold**
+    .replace(/\*(.*?)\*/g,'$1')           // *italic*
+    .replace(/^[\*\-]\s+/gm,'• ')         // - 목록 → •
+    .replace(/^\d+\.\s+/gm,(m)=>m)       // 숫자 목록 유지
+    .replace(/`{1,3}(.*?)`{1,3}/g,'$1')  // `코드`
+    .trim();
+  try{await navigator.clipboard.writeText(plain);}
+  catch(_){
+    const t=document.createElement('textarea');
+    t.value=plain;t.style.cssText='position:fixed;opacity:0';
+    document.body.appendChild(t);t.select();document.execCommand('copy');document.body.removeChild(t);
+  }
+  const btn=document.getElementById(btnId);
+  const orig=btn.textContent;
+  btn.textContent='✅ 복사됨'; btn.classList.add('copied');
+  setTimeout(()=>{btn.textContent=orig;btn.classList.remove('copied');},1500);
+}
+
 // ── AI 요약 ──
 async function summarizeSession(session, areaId, btnId){
   const key=document.getElementById('apiKey').value.trim();
@@ -522,7 +626,12 @@ ${fullText.slice(0,8000)}`;
     const gData=await gRes.json();
     const summary=gData.candidates?.[0]?.content?.parts?.[0]?.text||'요약 실패';
     area.innerHTML='<div class="summary-box">'+summary.replace(/</g,'&lt;').replace(/\n/g,'<br>')+'</div>';
-    if(session===currentSession) currentSession.summary=summary;
+    if(session===currentSession){
+      currentSession.summary=summary;
+      // 현재 세션 복사 버튼 표시
+      const copyRow=document.getElementById('summaryCopyRow');
+      if(copyRow) copyRow.style.display='block';
+    }
     btn.textContent='재요약';
   }catch(err){
     area.innerHTML='<div class="summary-box" style="color:#ff453a">오류: '+err.message+'</div>';
@@ -570,7 +679,7 @@ function renderModalBody(){
 
   // 기존 요약 있으면 표시
   if(session.summary){
-    body.innerHTML+='<div style="font-size:11px;color:#555;margin-top:16px;margin-bottom:6px;">AI 요약</div>';
+    body.innerHTML+='<div style="font-size:11px;color:#555;margin-top:16px;margin-bottom:6px;display:flex;align-items:center;justify-content:space-between;"><span>AI 요약</span><button class="copy-btn" id="copyModalSumBtn2" onclick="copySummary(\'modalSummaryArea\',\'copyModalSumBtn2\')">복사</button></div>';
     body.innerHTML+='<div class="summary-box" id="modalSummaryArea">'+session.summary.replace(/</g,'&lt;').replace(/\n/g,'<br>')+'</div>';
   } else {
     body.innerHTML+='<div id="modalSummaryArea"></div>';
