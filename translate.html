@@ -152,6 +152,10 @@
     <div class="sg">
       <label>API Key</label>
       <input type="password" id="apiKey" placeholder="AIza..." autocomplete="off" />
+      <div style="display:flex;align-items:center;gap:6px;margin-top:3px;">
+        <span id="keyHint" style="font-size:10px;"></span>
+        <button onclick="clearApiKey()" style="font-size:10px;padding:2px 6px;background:transparent;color:#ff453a;border:0.5px solid #ff453a44;border-radius:4px;">키 삭제</button>
+      </div>
     </div>
     <div class="sg">
       <label>세션명</label>
@@ -319,6 +323,52 @@ function toggleSettings(){
   btn.classList.toggle('open', !collapsed);
 }
 
+// ── 설정 저장/불러오기 ──
+function saveSettings(){
+  const key = document.getElementById('apiKey').value.trim();
+  const lang = document.getElementById('targetLang').value;
+  if(key) localStorage.setItem('gt_apikey', key);
+  localStorage.setItem('gt_lang', lang);
+}
+
+function loadSettings(){
+  const key = localStorage.getItem('gt_apikey');
+  const lang = localStorage.getItem('gt_lang');
+  if(key){
+    document.getElementById('apiKey').value = key;
+    // 저장된 키 표시 (마스킹 힌트)
+    showKeySaved(true);
+  }
+  if(lang){
+    const sel = document.getElementById('targetLang');
+    if([...sel.options].some(o=>o.value===lang)) sel.value = lang;
+  }
+}
+
+function showKeySaved(saved){
+  const hint = document.getElementById('keyHint');
+  if(!hint) return;
+  hint.textContent = saved ? '✅ 저장된 키 사용 중' : '';
+  hint.style.color = '#30d158';
+}
+
+function clearApiKey(){
+  if(!confirm('저장된 API Key를 삭제하시겠습니까?')) return;
+  localStorage.removeItem('gt_apikey');
+  document.getElementById('apiKey').value='';
+  showKeySaved(false);
+}
+
+// 입력 시 자동 저장
+document.getElementById('apiKey').addEventListener('change', ()=>{
+  saveSettings();
+  showKeySaved(!!document.getElementById('apiKey').value.trim());
+});
+document.getElementById('targetLang').addEventListener('change', ()=>{
+  saveSettings();
+  updateLabels();
+});
+
 function updateCtrlSession(){
   const el = document.getElementById('ctrlSession');
   if(!el) return;
@@ -341,9 +391,9 @@ function updateLabels(){
   document.getElementById('dstLabel').textContent='번역 ('+(langName[dst]||dst)+')';
   updateCtrlSession();
 }
-document.getElementById('targetLang').addEventListener('change',updateLabels);
-// 초기 레이블 설정
+// 초기 레이블 설정 및 저장된 설정 불러오기
 updateLabels();
+loadSettings();
 
 async function copyCol(boxId,btnId){
   const text=Array.from(document.getElementById(boxId).querySelectorAll('.pt')).map(el=>el.textContent.trim()).filter(Boolean).join('\n\n');
