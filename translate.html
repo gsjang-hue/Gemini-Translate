@@ -2,6 +2,7 @@
 <!DOCTYPE html>
 <!--
   Gemini Live Translate
+  v2.3  2026.07.28  다운로드 파일 맨 앞에 AI 요약 포함, 문서 구조 정리
   v2.2  2026.07.28  사후 번역 보정(완결 문단을 맥락 기반으로 재번역),
                     보정 켜기/끄기 토글
   v2.1  2026.07.28  문장이 끝나는 지점에서만 문단 분리(문장 중간 절단 방지),
@@ -234,7 +235,7 @@
         <option value="ja">일본어</option>
       </select>
     </div>
-    <div class="version-tag">v2.2 · 2026.07.28</div>
+    <div class="version-tag">v2.3 · 2026.07.28</div>
   </div>
 
   <!-- 대화 모드 안내 배너 -->
@@ -1312,15 +1313,29 @@ function deleteSession(e,id){
 }
 
 // ── 세션 텍스트 빌드 ──
-function buildFullText(session){
+// 요약문 안의 제목을 한 단계 낮춘다 — 'AI 요약' 아래로 자연스럽게 들어가도록
+function demoteHeadings(md){
+  return String(md).replace(/^(#{1,5})\s+/gm, (m,h)=>'#'.repeat(h.length+1)+' ');
+}
+
+function buildFullText(session, opts){
+  const includeSummary = !opts || opts.summary !== false;
   let txt='# '+session.name+'\n\n';
   txt+='- 일시: '+session.startTimeStr+'\n';
   txt+='- 언어: '+langPairLabel(session.lang)+'\n\n';
   txt+='---\n\n';
+
+  // AI 요약이 있으면 맨 앞에 넣는다 — 문서를 열자마자 결론부터 보이게
+  if(includeSummary && session.summary && session.summary.trim()){
+    txt+='## AI 요약\n\n'+demoteHeadings(session.summary.trim())+'\n\n';
+    txt+='---\n\n';
+  }
+
+  txt+='## 전문 (원문 · 번역)\n\n';
   const segs=pairSegments(session);
   segs.forEach((sg,n)=>{
     const m=segMeta(sg);
-    txt+='## 문단 '+(n+1);
+    txt+='### 문단 '+(n+1);
     if(m.time) txt+=' · '+m.time;
     if(scriptTag[m.lang]) txt+=' · '+scriptTag[m.lang];
     txt+='\n\n';
@@ -1406,7 +1421,7 @@ async function summarizeSession(session, areaId, btnId){
   const area=document.getElementById(areaId);
   area.innerHTML='<div class="summary-loading">Gemini가 요약 중입니다...</div>';
 
-  const fullText=buildFullText(session);
+  const fullText=buildFullText(session, {summary:false});   // 요약 만들 때는 기존 요약 제외
   const prompt=`다음은 실시간 번역된 회의 내용입니다. 아래 항목으로 한국어 회의록을 작성해주세요.
 
 ## 📌 핵심 요약 (3~5줄)
