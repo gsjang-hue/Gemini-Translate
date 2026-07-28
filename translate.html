@@ -450,10 +450,6 @@ document.getElementById('apiKey').addEventListener('change', ()=>{
   showKeySaved(!!document.getElementById('apiKey').value.trim());
 });
 // targetLang listener moved to meetingLang/convLang
-// document.getElementById('targetLang').addEventListener('change', ()=>{
-  saveSettings();
-  updateLabels();
-});
 
 function updateCtrlSession(){
   const el = document.getElementById('ctrlSession');
@@ -668,46 +664,6 @@ async function startTranslation(){
     currentKey=key; currentTargetLang=targetLang; currentSessionName=sessionName; resumptionHandle=null;
     currentSession={ name:sessionName, startTime:new Date().toISOString(), startTimeStr:dateStr(), lang:(convMode?'conv|auto':document.getElementById('meetingLang')?.value||'ko|auto'), src:[], dst:[], summary:'' };
     updateCurrentCard(); updateCtrlSession();
-  }
-    if(cont){
-      // 이어서: currentSession 유지, 화면 내용도 유지
-      currentKey=key;
-      currentTargetLang=targetLang;
-      currentSessionName=currentSession.name;
-      resumptionHandle=null;
-    } else {
-      // 새 세션: 초기화
-      currentKey=key;
-      currentTargetLang=targetLang;
-      currentSessionName=sessionName;
-      resumptionHandle=null;
-      currentSession={
-        name: sessionName,
-        startTime: new Date().toISOString(),
-        startTimeStr: dateStr(),
-        lang: document.getElementById('meetingLang')?.value || 'ko|auto',
-        src:[], dst:[], summary:''
-      };
-      document.getElementById('srcBox').innerHTML='';
-      document.getElementById('dstBox').innerHTML='';
-      updateCurrentCard();
-      updateCtrlSession();
-    }
-  } else {
-    // 처음 시작
-    currentKey=key;
-    currentTargetLang=targetLang;
-    currentSessionName=sessionName;
-    resumptionHandle=null;
-    currentSession={
-      name: sessionName,
-      startTime: new Date().toISOString(),
-      startTimeStr: dateStr(),
-      lang: document.getElementById('meetingLang')?.value || 'ko|auto',
-      src:[], dst:[], summary:''
-    };
-    updateCurrentCard();
-    updateCtrlSession();
   }
 
   // 설정 패널 자동 닫기
