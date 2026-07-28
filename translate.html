@@ -1,5 +1,19 @@
 
 <!DOCTYPE html>
+<!--
+  Gemini Live Translate
+  v1.8  2026.07.28  setup 필드 위치 수정(contextWindowCompression), 구성 폴백,
+                    재연결 횟수 제한, 오류 사유 표시, 버전 표기
+  v1.7  2026.07.28  대화 모드(양방향 음성) 추가, echo 중복출력 수정,
+                    자동저장·화면꺼짐방지·경과시간·글자크기 추가
+  v1.6              API Key 저장, 세션 이어쓰기 확인
+  v1.5              설정 패널 접기, AI 요약 복사(Plain Text)
+  v1.4              회의록 탭(세션 저장·AI 요약·다운로드·편집)
+  v1.3              문단 구분, 전체 복사, 6개 언어쌍
+  v1.2              2단 레이아웃(원문/번역), 고정 높이 스크롤
+  v1.1              앱 아이콘, 홈화면 추가 대응
+  v1.0              실시간 번역(텍스트 전용, 음성 출력 없음)
+-->
 <html lang="ko">
 <head>
 <meta charset="UTF-8">
@@ -74,6 +88,7 @@
   .font-ctrl { display: flex; gap: 4px; flex-shrink: 0; }
   .font-ctrl button { padding: 1px 7px; font-size: 11px; background: transparent; color: #777; border: 0.5px solid #333; border-radius: 5px; }
   .wake-note { font-size: 10px; color: #4a4; }
+  .version-tag { font-size: 10px; color: #3d3d3d; align-self: flex-end; margin-left: auto; padding-bottom: 2px; letter-spacing: 0.03em; }
 
   /* ── 회의록 탭 ── */
   .minutes-page { padding: 1rem; overflow-y: auto; flex: 1; min-height: 0; -webkit-overflow-scrolling: touch; }
@@ -193,6 +208,7 @@
         <option value="ja">일본어</option>
       </select>
     </div>
+    <div class="version-tag">v1.8 · 2026.07.28</div>
   </div>
 
   <!-- 대화 모드 안내 배너 -->
@@ -608,6 +624,8 @@ async function parse(e){
 
 let resumptionHandle = null;
 let isReconnecting = false;
+let reconnectTries = 0;
+const MAX_RECONNECT = 5;
 let currentKey = '';
 let currentTargetLang = '';
 let currentSessionName = '';
@@ -628,23 +646,33 @@ function startMicProcessor(){
   proc.connect(actx.destination);
 }
 
+// setup 구성 단계: 0=전체(무제한 세션+재개), 1=최소(검증된 기본형)
+// 서버가 setup을 거부하면 자동으로 1단계로 내려가 스스로 복구한다
+let setupTier = 0;
+
 function buildSetup(targetLang, isEcho){
-  return {
+  const s = {
     model:'models/gemini-3.5-live-translate-preview',
     generationConfig:{
       responseModalities:['AUDIO'],
-      translationConfig:{ targetLanguageCode:targetLang, echoTargetLanguage:!!isEcho },
-      contextWindowCompression:{ slidingWindow:{} }
-    },
-    sessionResumption:{}
+      translationConfig:{ targetLanguageCode:targetLang, echoTargetLanguage:!!isEcho }
+    }
   };
+  if(setupTier === 0){
+    // 아래 두 항목은 generationConfig가 아니라 setup 최상위 필드다
+    s.contextWindowCompression = { slidingWindow:{} };
+    s.sessionResumption = resumptionHandle ? { handle: resumptionHandle } : {};
+  }
+  return s;
 }
 
 function openWS(key, targetLang, isEcho, onMsg, assignTo){
   const url='wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key='+key;
   const socket = new WebSocket(url);
   socket.binaryType = 'blob';
+  socket._gotData = false;   // 서버 응답을 한 번이라도 받았는지 (setup 성공 판정)
   socket.onopen = () => {
+    socket._openedAt = Date.now();
     socket.send(JSON.stringify({setup: buildSetup(targetLang, isEcho)}));
     if(assignTo === 'ws'){
       const label = convMode
@@ -658,17 +686,47 @@ function openWS(key, targetLang, isEcho, onMsg, assignTo){
       isReconnecting = false;
     }
   };
-  socket.onmessage = ev => onMsg(ev);
+  socket.onmessage = ev => {
+    if(!socket._gotData){
+      socket._gotData = true;            // setup 통과 확인
+      if(assignTo === 'ws'){
+        reconnectTries = 0;              // 정상 수신되면 재시도 카운터 초기화
+        showErr('');
+      }
+    }
+    onMsg(ev);
+  };
   socket.onerror = () => { if(!isReconnecting && assignTo==='ws'){ showErr('연결 오류.'); cleanup(); } };
   socket.onclose = ev => {
-    if(ev.code===1000 || isReconnecting) return;
-    if(assignTo==='ws' && currentKey && currentSession){
-      setStatus('','재연결 시도 중...');
-      setTimeout(reconnectSession, 3000);
-    } else if(assignTo==='ws'){
-      showErr('연결 끊김 ('+ev.code+') '+(ev.reason||''));
+    if(ev.code === 1000) return;
+    if(assignTo !== 'ws') return;   // ws2는 ws 재연결에 딸려서 복구됨
+
+    const alive = Date.now() - (socket._openedAt || Date.now());
+    const configRejected = !socket._gotData && alive < 8000;
+
+    // setup이 거부된 경우 — 재연결해도 같은 결과이므로 구성을 낮춰 1회만 재시도
+    if(configRejected){
+      if(setupTier === 0){
+        setupTier = 1;
+        showErr('세션 옵션 미지원 → 기본 구성으로 재시도합니다');
+        setTimeout(()=>{ isReconnecting=true; reconnectSession(); }, 300);
+        return;
+      }
+      showErr('연결 거부 ('+ev.code+') '+(ev.reason||'사유 없음'));
       cleanup();
+      return;
     }
+
+    // 정상 작동 중 끊긴 경우 — 횟수 제한을 두고 재연결
+    if(currentKey && currentSession && reconnectTries < MAX_RECONNECT){
+      reconnectTries++;
+      setStatus('','재연결 시도 중... ('+reconnectTries+'/'+MAX_RECONNECT+')');
+      setTimeout(reconnectSession, Math.min(1000*reconnectTries, 5000));
+      return;
+    }
+
+    showErr('연결 끊김 ('+ev.code+') '+(ev.reason||'')+' — 시작을 다시 눌러주세요');
+    cleanup();
   };
   return socket;
 }
@@ -679,9 +737,7 @@ function reconnectSession(){
   if(ws){ try{ws.close(1000);}catch(_){} ws=null; }
   if(ws2){ try{ws2.close(1000);}catch(_){} ws2=null; }
   ws = openWS(currentKey, currentTargetLang, false, parse, 'ws');
-  if(convMode){
-    ws2 = openWS(currentKey, 'ko', false, parseConvReverse, 'ws2');
-  }
+  if(convMode) ws2 = openWS(currentKey, 'ko', false, parseConvReverse, 'ws2');
 }
 
 async function parseConvReverse(e){
@@ -725,6 +781,8 @@ async function startTranslation(){
   currentTargetLang = targetLang;
   currentSessionName = keepSession ? currentSession.name : sessionName;
   resumptionHandle = null;
+  reconnectTries = 0;
+  setupTier = 0;          // 매 시작마다 전체 구성부터 다시 시도
 
   if(!keepSession){
     currentSession = {
