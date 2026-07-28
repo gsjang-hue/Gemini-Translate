@@ -2,6 +2,8 @@
 <!DOCTYPE html>
 <!--
   Gemini Live Translate
+  v2.0  2026.07.28  원문·번역 문단번호 공유(좌우 동시 분리), 길이 초과 시 분리,
+                    회의록 문단 카드 표시, 다운로드 파일명 정리
   v1.9  2026.07.28  음성 끊김 해결(지터 버퍼·청크 병합), 음소거 버튼,
                     언어 변경 시 문단 분리 + 언어 태그
   v1.8  2026.07.28  setup 필드 위치 수정(contextWindowCompression), 구성 폴백,
@@ -88,6 +90,15 @@
   .para.ko .pt { color: #d0ecd0; }
   .para.fo .pt { color: #a9cbff; }
   .para .pt { font-size: var(--pt-size, 15px); }
+  .seg-card { border:0.5px solid #262626; border-radius:10px; padding:0.7rem 0.85rem; margin-bottom:12px; background:#151515; }
+  .seg-head { display:flex; align-items:center; gap:8px; margin-bottom:8px; padding-bottom:6px; border-bottom:0.5px solid #222; }
+  .seg-no { font-size:10px; color:#888; background:#242424; border-radius:4px; padding:2px 7px; letter-spacing:0.03em; }
+  .seg-time { font-size:10px; color:#4a4a4a; font-variant-numeric:tabular-nums; }
+  .seg-part { margin-bottom:8px; }
+  .seg-part:last-child { margin-bottom:0; }
+  .seg-label { font-size:9px; color:#5a5a5a; letter-spacing:0.1em; margin-bottom:3px; }
+  .seg-card .para { margin-bottom:4px; }
+  .seg-card .para .ts { display:none; }
   .lang-tag { display:inline-block; font-size:9px; color:#7a7a7a; border:0.5px solid #3a3a3a; border-radius:3px; padding:0 4px; margin-right:6px; vertical-align:1px; letter-spacing:0.05em; }
   .elapsed { font-size: 11px; color: #666; font-variant-numeric: tabular-nums; }
   .font-ctrl { display: flex; gap: 4px; flex-shrink: 0; }
@@ -214,7 +225,7 @@
         <option value="ja">일본어</option>
       </select>
     </div>
-    <div class="version-tag">v1.9 · 2026.07.28</div>
+    <div class="version-tag">v2.0 · 2026.07.28</div>
   </div>
 
   <!-- 대화 모드 안내 배너 -->
@@ -315,7 +326,6 @@ let isPlayingAudio = false;
 const SR=16000;
 const PLAYBACK_SR=24000;
 const langName={ko:'한국어',en:'영어',ja:'일본어',zh:'중국어'};
-const srcTimer_={id:null}, dstTimer_={id:null};
 const PARA_GAP=2500;
 
 // 현재 세션 데이터
@@ -344,7 +354,8 @@ function clearAll(){
   }
   document.getElementById('srcBox').innerHTML='';
   document.getElementById('dstBox').innerHTML='';
-  srcTimer_.id=dstTimer_.id=null;
+  if(segSilenceT){clearTimeout(segSilenceT);segSilenceT=null;}
+  segId=0; segLang=''; segChars=0;
   showErr('');
   currentSession=null;
   updateCurrentCard();
@@ -390,50 +401,67 @@ function isNearBottom(el){ return (el.scrollHeight - el.scrollTop - el.clientHei
 
 // groupKey: 같은 묶음인지 판단하는 키(감지된 언어 또는 출력 방향).
 // 침묵 2.5초 외에도 이 키가 바뀌면 문단을 나눈다.
-function appendText(boxId, text, cls, timerRef, storeArr, groupKey){
+// ══════════════════════════════════════
+// 문단 관리 — 원문/번역이 같은 문단번호(segId)를 공유한다.
+// 이렇게 해야 좌우 화면이 동시에 나뉘고 회의록에서 원문·번역이 정확히 짝지어진다.
+// 문단이 바뀌는 조건: (1) 침묵 2.5초  (2) 원문 언어 변경(발언자 전환)  (3) 길이 초과
+// ══════════════════════════════════════
+let segId = 0;
+let segSilenceT = null;
+let segLang = '';     // 현재 문단의 원문 언어
+let segChars = 0;     // 현재 문단 누적 글자 수
+const SEG_MAX_CHARS = 600;
+
+function bumpSegment(){
+  segId++; segLang=''; segChars=0;
+}
+
+// 원문이 도착할 때 호출해 문단 전환 여부를 판단한다
+function noteSource(text){
+  const lang = detectScript(text);
+  // 언어가 실제로 바뀌면 이 텍스트부터 새 문단
+  if(lang && segLang && lang !== segLang) bumpSegment();
+  if(lang && !segLang) segLang = lang;
+
+  if(segSilenceT) clearTimeout(segSilenceT);
+  segSilenceT = setTimeout(bumpSegment, PARA_GAP);
+
+  const before = segId;
+  segChars += text.length;
+  return { lang, seg: before };
+}
+
+// 텍스트를 붙인 뒤 길이 초과면 다음 텍스트부터 새 문단이 되게 한다
+function noteSourceAfter(){
+  if(segChars > SEG_MAX_CHARS){ const l=segLang; bumpSegment(); segLang=l; }
+}
+
+function appendText(boxId, text, cls, storeArr, segKey, tagLang){
   if(!text||!text.trim())return;
   const box=document.getElementById(boxId);
-  const stick=isNearBottom(box);          // 추가 전에 위치 판단
-  if(timerRef.id){clearTimeout(timerRef.id);timerRef.id=null;}
+  const stick=isNearBottom(box);        // 추가 전에 위치 판단
+  const key=String(segKey);
+  const last=box.lastElementChild;
 
-  const gk = groupKey || '';
-  const last = box.lastElementChild;
-  const prevGk = last ? (last.dataset.gk||'') : '';
-  // 판정 보류('')이거나 이전과 같으면 이어 쓰고, 실제로 바뀌면 새 문단
-  const sameGroup = !gk || !prevGk || prevGk===gk;
-  const canAppend = last && last.classList.contains('active') && sameGroup;
-
-  if(canAppend){
+  if(last && last.dataset.gk===key){
     last.querySelector('.pt').textContent+=' '+text.trim();
     if(storeArr&&storeArr.length) storeArr[storeArr.length-1].text+=' '+text.trim();
-    // 이전이 보류 상태였다면 이제 확정된 언어로 채워 넣는다
-    if(!prevGk && gk){
-      last.dataset.gk=gk;
-      const tag=last.querySelector('.lang-tag');
-      if(tag && scriptTag[gk]) tag.textContent=scriptTag[gk];
-      if(storeArr&&storeArr.length) storeArr[storeArr.length-1].lang=gk;
-    }
   } else {
     const p=document.createElement('div');
-    p.className='para active'+(cls?' '+cls:'');
-    p.dataset.gk=gk;
+    p.className='para'+(cls?' '+cls:'');
+    p.dataset.gk=key;
     const tsEl=document.createElement('span'); tsEl.className='ts'; tsEl.textContent=ts();
     p.appendChild(tsEl);
-    if(scriptTag[gk]){
-      const tg=document.createElement('span'); tg.className='lang-tag'; tg.textContent=scriptTag[gk];
+    if(scriptTag[tagLang]){
+      const tg=document.createElement('span'); tg.className='lang-tag'; tg.textContent=scriptTag[tagLang];
       p.appendChild(tg);
     }
     const ptEl=document.createElement('span'); ptEl.className='pt'; ptEl.textContent=text.trim();
     p.appendChild(ptEl);
     box.appendChild(p);
-    if(storeArr) storeArr.push({time:ts(), text:text.trim(), lang:gk});
+    if(storeArr) storeArr.push({seg:key, time:ts(), text:text.trim(), lang:tagLang||''});
   }
   if(stick) box.scrollTop=box.scrollHeight;
-  timerRef.id=setTimeout(()=>{
-    const cur=box.lastElementChild;
-    if(cur)cur.classList.remove('active');
-    timerRef.id=null;
-  },PARA_GAP);
 }
 
 // ── 글자 크기 ──
@@ -730,17 +758,22 @@ async function parse(e){
     const dstArr=currentSession?currentSession.dst:null;
     // 대화 모드에서 ws의 출력은 외국어이므로 별도 색상(fo)으로 구분
     const outCls = convMode ? 'fo' : 'ko';
-    if(sc.inputTranscription?.text)
-      appendText('srcBox',sc.inputTranscription.text,'',srcTimer_,srcArr,detectScript(sc.inputTranscription.text));
+    // 원문이 문단 경계를 정하고, 번역은 같은 문단번호를 그대로 따른다
+    if(sc.inputTranscription?.text){
+      const t=sc.inputTranscription.text;
+      const info=noteSource(t);
+      appendText('srcBox',t,'',srcArr,info.seg,info.lang);
+      noteSourceAfter();
+    }
     if(sc.outputTranscription?.text)
-      appendText('dstBox',sc.outputTranscription.text,outCls,dstTimer_,dstArr,outCls);
+      appendText('dstBox',sc.outputTranscription.text,outCls,dstArr,segId,'');
 
     if(sc.modelTurn?.parts){
       for(const p of sc.modelTurn.parts){
         if(!muted && p.inlineData?.data && p.inlineData.mimeType?.startsWith('audio/')){
           playAudioChunk(base64ToFloat32(p.inlineData.data, PLAYBACK_SR));
         }
-        if(p.text) appendText('dstBox',p.text,outCls,dstTimer_,dstArr,outCls);
+        if(p.text) appendText('dstBox',p.text,outCls,dstArr,segId,'');
       }
     }
   }catch(_){}
@@ -868,7 +901,7 @@ async function parseConvReverse(e){
   let txt=typeof e.data==='string'?e.data:(e.data instanceof Blob?await e.data.text():new TextDecoder().decode(e.data));
   try{
     const d=JSON.parse(txt); const sc=d.serverContent; if(!sc)return;
-    if(sc.outputTranscription?.text) appendText('dstBox',sc.outputTranscription.text,'ko',dstTimer_,currentSession?.dst||null,'ko');
+    if(sc.outputTranscription?.text) appendText('dstBox',sc.outputTranscription.text,'ko',currentSession?.dst||null,segId,'');
     if(sc.modelTurn?.parts){
       for(const p of sc.modelTurn.parts){
         if(!muted && p.inlineData?.data && p.inlineData.mimeType?.startsWith('audio/'))
@@ -907,6 +940,19 @@ async function startTranslation(){
   resumptionHandle = null;
   reconnectTries = 0;
   setupTier = 0;          // 매 시작마다 전체 구성부터 다시 시도
+
+  // 문단번호 초기화 — 이어쓰기면 기존 최대값 다음부터 시작
+  if(keepSession && currentSession){
+    let mx=-1;
+    [...(currentSession.src||[]),...(currentSession.dst||[])].forEach(x=>{
+      const n=Number(x.seg); if(!isNaN(n)&&n>mx) mx=n;
+    });
+    segId = mx+1;
+  } else {
+    segId = 0;
+  }
+  segLang=''; segChars=0;
+  if(segSilenceT){clearTimeout(segSilenceT);segSilenceT=null;}
 
   if(!keepSession){
     currentSession = {
@@ -958,9 +1004,7 @@ function cleanup(){
   if(stream){stream.getTracks().forEach(t=>t.stop());stream=null;}
   if(ws){try{ws.close(1000);}catch(_){}ws=null;}
   if(ws2){try{ws2.close(1000);}catch(_){}ws2=null;}
-  if(srcTimer_.id){clearTimeout(srcTimer_.id);srcTimer_.id=null;}
-  if(dstTimer_.id){clearTimeout(dstTimer_.id);dstTimer_.id=null;}
-  document.querySelectorAll('.para.active').forEach(p=>p.classList.remove('active'));
+  if(segSilenceT){clearTimeout(segSilenceT);segSilenceT=null;}
   stopElapsed();
   releaseWakeLock();
 
@@ -1012,6 +1056,38 @@ function getSessions(){
 }
 function setSessions(arr){
   localStorage.setItem('gt_sessions',JSON.stringify(arr));
+}
+
+function escapeHtml(s){
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// 원문·번역을 문단번호로 짝지어 묶는다.
+// seg가 없는 예전 세션은 순번으로 대응시켜 하위 호환을 지킨다.
+function pairSegments(session){
+  const src=session.src||[], dst=session.dst||[];
+  const hasSeg = src.some(x=>x.seg!=null) || dst.some(x=>x.seg!=null);
+
+  if(!hasSeg){
+    const n=Math.max(src.length,dst.length), out=[];
+    for(let i=0;i<n;i++) out.push({key:String(i), src:src[i]?[src[i]]:[], dst:dst[i]?[dst[i]]:[]});
+    return out;
+  }
+  const map=new Map();
+  const add=(item,which)=>{
+    const k=String(item.seg!=null?item.seg:'_');
+    if(!map.has(k)) map.set(k,{key:k,src:[],dst:[]});
+    map.get(k)[which].push(item);
+  };
+  src.forEach(x=>add(x,'src'));
+  dst.forEach(x=>add(x,'dst'));
+  return [...map.values()].sort((a,b)=>(Number(a.key)||0)-(Number(b.key)||0));
+}
+
+function segMeta(sg){
+  const first = sg.src[0] || sg.dst[0] || {};
+  const langItem = sg.src.find(x=>x.lang) || {};
+  return { time: first.time||'', lang: langItem.lang||'' };
 }
 
 // 세션을 id 기준으로 저장/갱신 (중복 누적 방지)
@@ -1067,29 +1143,47 @@ function deleteSession(e,id){
 
 // ── 세션 텍스트 빌드 ──
 function buildFullText(session){
-  let txt='# '+session.name+'\n';
-  txt+='일시: '+session.startTimeStr+'\n';
-  txt+='언어: '+langPairLabel(session.lang)+'\n\n';
+  let txt='# '+session.name+'\n\n';
+  txt+='- 일시: '+session.startTimeStr+'\n';
+  txt+='- 언어: '+langPairLabel(session.lang)+'\n\n';
   txt+='---\n\n';
-  const maxLen=Math.max(session.src.length,session.dst.length);
-  for(let i=0;i<maxLen;i++){
-    if(session.src[i]) txt+='[원문 '+session.src[i].time+']\n'+session.src[i].text+'\n\n';
-    if(session.dst[i]) txt+='[번역 '+session.dst[i].time+']\n'+session.dst[i].text+'\n\n';
-    if(i<maxLen-1) txt+='---\n\n';
-  }
+  const segs=pairSegments(session);
+  segs.forEach((sg,n)=>{
+    const m=segMeta(sg);
+    txt+='## 문단 '+(n+1);
+    if(m.time) txt+=' · '+m.time;
+    if(scriptTag[m.lang]) txt+=' · '+scriptTag[m.lang];
+    txt+='\n\n';
+    if(sg.src.length) txt+='**원문**\n\n'+sg.src.map(x=>x.text).join(' ')+'\n\n';
+    if(sg.dst.length) txt+='**번역**\n\n'+sg.dst.map(x=>x.text).join(' ')+'\n\n';
+  });
   return txt;
 }
 
 // ── 다운로드 ──
+// 파일명에 마침표를 쓰지 않는다 — 여러 개 있으면 iOS가 확장자를 잘못 인식한다
+function safeFileName(session){
+  const base=(session.name||'session')
+    .replace(/[^0-9A-Za-z\uAC00-\uD7A3\u3131-\u318E _-]+/g,'')
+    .replace(/\s+/g,'_')
+    .replace(/_+/g,'_')
+    .replace(/^[_-]+|[_-]+$/g,'')
+    .slice(0,60) || 'session';
+  const d = session.startTime ? new Date(session.startTime) : new Date();
+  const z = n => String(n).padStart(2,'0');
+  const stamp = d.getFullYear()+z(d.getMonth()+1)+z(d.getDate())+'-'+z(d.getHours())+z(d.getMinutes());
+  return base+'_'+stamp+'.md';
+}
+
 function downloadSession(session){
   const txt=buildFullText(session);
   const blob=new Blob([txt],{type:'text/markdown;charset=utf-8'});
   const url=URL.createObjectURL(blob);
   const a=document.createElement('a');
   a.href=url;
-  a.download=session.name.replace(/[/\:*?"<>|]/g,'_')+'_'+session.startTimeStr.replace(/[: ]/g,'-')+'.md';
+  a.download=safeFileName(session);
   a.click();
-  URL.revokeObjectURL(url);
+  setTimeout(()=>URL.revokeObjectURL(url), 1000);
 }
 
 function downloadCurrent(){
@@ -1222,12 +1316,29 @@ function renderModalBody(){
   body.className = editMode ? 'edit-mode' : '';
   body.innerHTML='<div style="font-size:12px;color:#555;margin-bottom:12px;">'+session.startTimeStr+' · '+langPairLabel(session.lang)+'</div>';
 
-  // 원문/번역 표시 (data-type, data-idx로 편집 시 추적)
-  const maxLen=Math.max(session.src.length,session.dst.length);
-  for(let i=0;i<maxLen;i++){
-    if(session.src[i]) body.innerHTML+=renderPara('src', i, session.src[i], '');
-    if(session.dst[i]) body.innerHTML+=renderPara('dst', i, session.dst[i], 'ko');
-  }
+  // 문단 단위로 원문·번역을 한 덩어리(카드)로 묶어 보여준다
+  const segs=pairSegments(session);
+  let html='';
+  segs.forEach((sg,n)=>{
+    const m=segMeta(sg);
+    html+='<div class="seg-card">';
+    html+='<div class="seg-head"><span class="seg-no">문단 '+(n+1)+'</span>'
+        + (m.time?'<span class="seg-time">'+escapeHtml(m.time)+'</span>':'')
+        + (scriptTag[m.lang]?'<span class="lang-tag">'+scriptTag[m.lang]+'</span>':'')
+        + '</div>';
+    if(sg.src.length){
+      html+='<div class="seg-part"><div class="seg-label">원문</div>';
+      sg.src.forEach(it=>{ html+=renderPara('src', session.src.indexOf(it), it, ''); });
+      html+='</div>';
+    }
+    if(sg.dst.length){
+      html+='<div class="seg-part"><div class="seg-label">번역</div>';
+      sg.dst.forEach(it=>{ html+=renderPara('dst', session.dst.indexOf(it), it, 'ko'); });
+      html+='</div>';
+    }
+    html+='</div>';
+  });
+  body.innerHTML+=html;
 
   // 기존 요약 있으면 표시
   if(session.summary){
@@ -1240,10 +1351,12 @@ function renderModalBody(){
 
 function renderPara(type, idx, item, cls){
   const editable = editMode ? 'true' : 'false';
-  return '<div class="para'+(cls?' '+cls:'')+'" data-type="'+type+'" data-idx="'+idx+'">'
-    +'<span class="ts">'+item.time+'</span>'
-    +'<button class="para-del" onclick="deletePara(this)">삭제</button><br>'
-    +'<span class="pt" contenteditable="'+editable+'">'+item.text+'</span>'
+  return '<div class="para'+(cls?' '+cls:'')+'" data-type="'+type+'" data-idx="'+idx+'"'
+    +' data-seg="'+(item.seg!=null?escapeHtml(item.seg):'')+'"'
+    +' data-lang="'+escapeHtml(item.lang||'')+'">'
+    +'<span class="ts">'+escapeHtml(item.time||'')+'</span>'
+    +'<button class="para-del" onclick="deletePara(this)">삭제</button>'
+    +'<span class="pt" contenteditable="'+editable+'">'+escapeHtml(item.text)+'</span>'
     +'</div>';
 }
 
@@ -1288,8 +1401,11 @@ function saveEdit(){
     const time = p.querySelector('.ts').textContent;
     const text = p.querySelector('.pt').textContent.trim();
     if(!text) return;
-    if(type==='src') newSrc.push({time, text});
-    else newDst.push({time, text});
+    const item = {time, text};
+    if(p.dataset.seg!=='') item.seg = p.dataset.seg;   // 문단 대응 유지
+    if(p.dataset.lang)     item.lang = p.dataset.lang;
+    if(type==='src') newSrc.push(item);
+    else newDst.push(item);
   });
   session.src = newSrc;
   session.dst = newDst;
