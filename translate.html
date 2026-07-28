@@ -68,6 +68,12 @@
   .para .ts { display: block; font-size: 10px; color: #3a3a3a; margin-bottom: 3px; }
   .para .pt { font-size: 15px; line-height: 1.75; color: #e0e0e0; word-break: break-word; }
   .para.ko .pt { color: #d0ecd0; }
+  .para.fo .pt { color: #a9cbff; }
+  .para .pt { font-size: var(--pt-size, 15px); }
+  .elapsed { font-size: 11px; color: #666; font-variant-numeric: tabular-nums; }
+  .font-ctrl { display: flex; gap: 4px; flex-shrink: 0; }
+  .font-ctrl button { padding: 1px 7px; font-size: 11px; background: transparent; color: #777; border: 0.5px solid #333; border-radius: 5px; }
+  .wake-note { font-size: 10px; color: #4a4; }
 
   /* ── 회의록 탭 ── */
   .minutes-page { padding: 1rem; overflow-y: auto; flex: 1; min-height: 0; -webkit-overflow-scrolling: touch; }
@@ -197,7 +203,12 @@
   <div class="statusbar">
     <span class="dot" id="dot"></span>
     <span id="statusText">대기 중</span>
+    <span id="elapsed" class="elapsed"></span>
     <span class="err" id="err"></span>
+    <span class="font-ctrl">
+      <button onclick="adjustFont(-1)" title="글자 작게">A−</button>
+      <button onclick="adjustFont(1)" title="글자 크게">A+</button>
+    </span>
   </div>
   <div class="translate-area">
     <div class="col">
@@ -306,20 +317,36 @@ function setStatus(t,txt){document.getElementById('dot').className='dot'+(t?' '+
 function showErr(m){document.getElementById('err').textContent=m;}
 
 function clearAll(){
+  if(currentSession && (currentSession.src.length||currentSession.dst.length)){
+    if(!confirm('현재 화면의 번역 내용을 지웁니다.\n(저장된 회의록은 삭제되지 않습니다)')) return;
+  }
   document.getElementById('srcBox').innerHTML='';
   document.getElementById('dstBox').innerHTML='';
   srcTimer_.id=dstTimer_.id=null;
   showErr('');
   currentSession=null;
   updateCurrentCard();
+  updateCtrlSession();
 }
 
 function ts(){return new Date().toTimeString().slice(0,8);}
+
+// 세션의 lang 문자열('ko|en','conv|en','ko|auto')을 사람이 읽는 표기로 변환
+function langPairLabel(langStr){
+  const[a,b]=(langStr||'ko|auto').split('|');
+  if(a==='conv') return '한국어 ↔ '+(langName[b]||b)+' (대화)';
+  const s = b==='auto' ? '자동감지' : (langName[b]||b);
+  return s+' → '+(langName[a]||a);
+}
 function dateStr(){return new Date().toLocaleString('ko-KR',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'});}
+
+// 사용자가 위로 스크롤해 읽는 중이면 자동 스크롤을 멈춤
+function isNearBottom(el){ return (el.scrollHeight - el.scrollTop - el.clientHeight) < 80; }
 
 function appendText(boxId, text, cls, timerRef, storeArr){
   if(!text||!text.trim())return;
   const box=document.getElementById(boxId);
+  const stick=isNearBottom(box);          // 추가 전에 위치 판단
   if(timerRef.id){clearTimeout(timerRef.id);timerRef.id=null;}
   const last=box.lastElementChild;
   if(last&&last.classList.contains('active')){
@@ -328,17 +355,59 @@ function appendText(boxId, text, cls, timerRef, storeArr){
   } else {
     const p=document.createElement('div');
     p.className='para active'+(cls?' '+cls:'');
-    p.innerHTML='<span class="ts">'+ts()+'</span><span class="pt">'+text.trim()+'</span>';
+    const tsEl=document.createElement('span'); tsEl.className='ts'; tsEl.textContent=ts();
+    const ptEl=document.createElement('span'); ptEl.className='pt'; ptEl.textContent=text.trim();
+    p.appendChild(tsEl); p.appendChild(ptEl);
     box.appendChild(p);
     if(storeArr) storeArr.push({time:ts(), text:text.trim()});
   }
-  box.scrollTop=box.scrollHeight;
+  if(stick) box.scrollTop=box.scrollHeight;
   timerRef.id=setTimeout(()=>{
     const cur=box.lastElementChild;
     if(cur)cur.classList.remove('active');
     timerRef.id=null;
   },PARA_GAP);
 }
+
+// ── 글자 크기 ──
+function applyFont(px){
+  document.documentElement.style.setProperty('--pt-size', px+'px');
+  localStorage.setItem('gt_fontsize', String(px));
+}
+function adjustFont(delta){
+  const cur=parseInt(localStorage.getItem('gt_fontsize')||'15',10);
+  applyFont(Math.max(11, Math.min(26, cur+delta)));
+}
+
+// ── 화면 꺼짐 방지 (회의 중 세션 끊김 예방) ──
+let wakeLock=null;
+async function acquireWakeLock(){
+  try{
+    if('wakeLock' in navigator){
+      wakeLock = await navigator.wakeLock.request('screen');
+      wakeLock.addEventListener('release', ()=>{ wakeLock=null; });
+    }
+  }catch(_){ wakeLock=null; }
+}
+function releaseWakeLock(){ try{ wakeLock&&wakeLock.release(); }catch(_){} wakeLock=null; }
+// 앱이 다시 포그라운드로 오면 재획득
+document.addEventListener('visibilitychange', ()=>{
+  if(document.visibilityState==='visible' && ws && ws.readyState===1 && !wakeLock) acquireWakeLock();
+});
+
+// ── 경과 시간 ──
+let elapsedInt=null, startedAt=0;
+function startElapsed(){
+  startedAt=Date.now();
+  clearInterval(elapsedInt);
+  elapsedInt=setInterval(()=>{
+    const s=Math.floor((Date.now()-startedAt)/1000);
+    const mm=String(Math.floor(s/60)).padStart(2,'0'), ss=String(s%60).padStart(2,'0');
+    const el=document.getElementById('elapsed');
+    if(el) el.textContent=(s>=3600? Math.floor(s/3600)+':' : '')+mm+':'+ss;
+  },1000);
+}
+function stopElapsed(){ clearInterval(elapsedInt); elapsedInt=null; }
 
 function toggleSettings(){
   const panel = document.getElementById('settingsPanel');
@@ -394,6 +463,7 @@ async function playAudioChunk(float32data){
   // 재생용 AudioContext는 마이크용과 별도로 관리
   if(!window.playActx || window.playActx.state==='closed'){
     window.playActx = new (window.AudioContext||window.webkitAudioContext)({sampleRate:PLAYBACK_SR});
+    window.audioEndTime = 0;   // 새 컨텍스트면 재생 스케줄 초기화
   }
   const ctx = window.playActx;
   if(ctx.state==='suspended') await ctx.resume();
@@ -411,23 +481,26 @@ async function playAudioChunk(float32data){
 // ── 설정 저장/불러오기 ──
 function saveSettings(){
   const key = document.getElementById('apiKey').value.trim();
-  const lang = document.getElementById('meetingLang')?.value || document.getElementById('convLang')?.value || '';
   if(key) localStorage.setItem('gt_apikey', key);
-  localStorage.setItem('gt_lang', lang);
+  const m = document.getElementById('meetingLang')?.value;
+  const cv = document.getElementById('convLang')?.value;
+  if(m)  localStorage.setItem('gt_meetingLang', m);
+  if(cv) localStorage.setItem('gt_convLang', cv);
 }
 
 function loadSettings(){
   const key = localStorage.getItem('gt_apikey');
-  const lang = localStorage.getItem('gt_lang');
-  const mode = localStorage.getItem('gt_mode');
   if(key){ document.getElementById('apiKey').value=key; showKeySaved(true); }
-  if(lang){
-    const selM=document.getElementById('meetingLang');
-    const selC=document.getElementById('convLang');
-    if(selM && [...selM.options].some(o=>o.value===lang)) selM.value=lang;
-    if(selC && [...selC.options].some(o=>o.value===lang)) selC.value=lang;
-  }
-  if(mode==='1' && !convMode) toggleMode();
+  const setSel=(id,val)=>{
+    const s=document.getElementById(id);
+    if(s && val && [...s.options].some(o=>o.value===val)) s.value=val;
+  };
+  setSel('meetingLang', localStorage.getItem('gt_meetingLang'));
+  setSel('convLang',    localStorage.getItem('gt_convLang'));
+  const fs = parseInt(localStorage.getItem('gt_fontsize')||'15',10);
+  if(fs>=11 && fs<=26) applyFont(fs);
+  if(localStorage.getItem('gt_mode')==='1' && !convMode) toggleMode();
+  updateLabels();
 }
 
 function showKeySaved(saved){
@@ -497,12 +570,6 @@ async function copyCol(boxId,btnId){
 function f32i16(buf){const o=new Int16Array(buf.length);for(let i=0;i<buf.length;i++){const s=Math.max(-1,Math.min(1,buf[i]));o[i]=s<0?s*0x8000:s*0x7FFF;}return o;}
 function b64(i16){const b=new Uint8Array(i16.buffer);let s='';for(let i=0;i<b.length;i++)s+=String.fromCharCode(b[i]);return btoa(s);}
 
-let resumptionHandle = null; // GoAway 후 재연결용 핸들
-let isReconnecting = false;
-let currentKey = '';
-let currentTargetLang = '';
-let currentSessionName = '';
-
 async function parse(e){
   let txt=typeof e.data==='string'?e.data:(e.data instanceof Blob?await e.data.text():new TextDecoder().decode(e.data));
   try{
@@ -523,175 +590,181 @@ async function parse(e){
     const sc=d.serverContent;if(!sc)return;
     const srcArr=currentSession?currentSession.src:null;
     const dstArr=currentSession?currentSession.dst:null;
+    // 대화 모드에서 ws의 출력은 외국어이므로 별도 색상(fo)으로 구분
+    const outCls = convMode ? 'fo' : 'ko';
     if(sc.inputTranscription?.text) appendText('srcBox',sc.inputTranscription.text,'',srcTimer_,srcArr);
-    if(sc.outputTranscription?.text) appendText('dstBox',sc.outputTranscription.text,'ko',dstTimer_,dstArr);
+    if(sc.outputTranscription?.text) appendText('dstBox',sc.outputTranscription.text,outCls,dstTimer_,dstArr);
 
-    // 음성 출력 ON이면 오디오 청크 재생
-    if(voiceOutputEnabled && sc.modelTurn?.parts){
+    if(sc.modelTurn?.parts){
       for(const p of sc.modelTurn.parts){
-        if(p.inlineData?.data && p.inlineData.mimeType?.startsWith('audio/')){
-          const float32 = base64ToFloat32(p.inlineData.data, PLAYBACK_SR);
-          playAudioChunk(float32);
+        if(convMode && p.inlineData?.data && p.inlineData.mimeType?.startsWith('audio/')){
+          playAudioChunk(base64ToFloat32(p.inlineData.data, PLAYBACK_SR));
         }
-        if(p.text) appendText('dstBox',p.text,'ko',dstTimer_,dstArr);
+        if(p.text) appendText('dstBox',p.text,outCls,dstTimer_,dstArr);
       }
-    } else if(sc.modelTurn?.parts){
-      (sc.modelTurn.parts).forEach(p=>{if(p.text)appendText('dstBox',p.text,'ko',dstTimer_,dstArr);});
     }
   }catch(_){}
 }
 
-function connectWebSocket(key, targetLang, sessionName, handle, wsRef, parseHandler){
+let resumptionHandle = null;
+let isReconnecting = false;
+let currentKey = '';
+let currentTargetLang = '';
+let currentSessionName = '';
+
+// ── 마이크 프로세서 시작 ──
+function startMicProcessor(){
+  if(proc || !actx || !stream) return;
+  const src = actx.createMediaStreamSource(stream);
+  proc = actx.createScriptProcessor(2048,1,1);
+  proc.onaudioprocess = ev => {
+    const data = b64(f32i16(ev.inputBuffer.getChannelData(0)));
+    if(ws && ws.readyState===1)
+      ws.send(JSON.stringify({realtimeInput:{audio:{data, mimeType:'audio/pcm;rate=16000'}}}));
+    if(convMode && ws2 && ws2.readyState===1)
+      ws2.send(JSON.stringify({realtimeInput:{audio:{data, mimeType:'audio/pcm;rate=16000'}}}));
+  };
+  src.connect(proc);
+  proc.connect(actx.destination);
+}
+
+function buildSetup(targetLang, isEcho){
+  return {
+    model:'models/gemini-3.5-live-translate-preview',
+    generationConfig:{
+      responseModalities:['AUDIO'],
+      translationConfig:{ targetLanguageCode:targetLang, echoTargetLanguage:!!isEcho },
+      contextWindowCompression:{ slidingWindow:{} }
+    },
+    sessionResumption:{}
+  };
+}
+
+function openWS(key, targetLang, isEcho, onMsg, assignTo){
   const url='wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key='+key;
-  const socket=new WebSocket(url);
-  socket.binaryType='blob';
-
-  socket.onopen=()=>{
-    const setup = {
-      model:'models/gemini-3.5-live-translate-preview',
-      generationConfig:{
-        responseModalities:['AUDIO'],
-        translationConfig:{
-          targetLanguageCode: targetLang,
-          echoTargetLanguage: convMode // 대화 모드에서만 true
-        },
-        contextWindowCompression:{ slidingWindow:{} }
-      }
-    };
-    if(handle) setup.sessionResumption = {handle};
-    else setup.sessionResumption = {};
-    socket.send(JSON.stringify({setup}));
-
-    if(wsRef === 'ws'){
-      setStatus('recording','녹음 중 — '+sessionName);
-      document.getElementById('stopBtn').disabled=false;
-      if(!proc && actx && stream){
-        const src=actx.createMediaStreamSource(stream);
-        proc=actx.createScriptProcessor(2048,1,1);
-        proc.onaudioprocess=ev=>{
-          if(!ws||ws.readyState!==1) return;
-          const data=b64(f32i16(ev.inputBuffer.getChannelData(0)));
-          ws.send(JSON.stringify({realtimeInput:{audio:{data,mimeType:'audio/pcm;rate=16000'}}}));
-          // 대화 모드: ws2에도 동일 오디오 전송
-          if(convMode && ws2 && ws2.readyState===1){
-            ws2.send(JSON.stringify({realtimeInput:{audio:{data,mimeType:'audio/pcm;rate=16000'}}}));
-          }
-        };
-        src.connect(proc);proc.connect(actx.destination);
-      }
-      isReconnecting=false;
+  const socket = new WebSocket(url);
+  socket.binaryType = 'blob';
+  socket.onopen = () => {
+    socket.send(JSON.stringify({setup: buildSetup(targetLang, isEcho)}));
+    if(assignTo === 'ws'){
+      const label = convMode
+        ? '🗣 대화 모드 — '+langPairLabel(currentSession?currentSession.lang:'conv|en')
+        : '녹음 중 — '+currentSessionName;
+      setStatus('recording', label);
+      document.getElementById('stopBtn').disabled = false;
+      startMicProcessor();
+      if(!elapsedInt) startElapsed();
+      acquireWakeLock();
+      isReconnecting = false;
     }
   };
-
-  socket.onmessage=ev=>parseHandler(ev);
-  socket.onerror=()=>{ if(!isReconnecting&&wsRef==='ws'){showErr('연결 오류.');cleanup();} };
-  socket.onclose=ev=>{
-    if(ev.code===1000||isReconnecting) return;
-    if(wsRef==='ws' && currentKey && currentSession){
+  socket.onmessage = ev => onMsg(ev);
+  socket.onerror = () => { if(!isReconnecting && assignTo==='ws'){ showErr('연결 오류.'); cleanup(); } };
+  socket.onclose = ev => {
+    if(ev.code===1000 || isReconnecting) return;
+    if(assignTo==='ws' && currentKey && currentSession){
       setStatus('','재연결 시도 중...');
-      setTimeout(()=>reconnectSession(), 3000);
-    } else if(wsRef==='ws'){
+      setTimeout(reconnectSession, 3000);
+    } else if(assignTo==='ws'){
       showErr('연결 끊김 ('+ev.code+') '+(ev.reason||''));
       cleanup();
     }
   };
-
-  if(wsRef==='ws') ws=socket;
-  else ws2=socket;
   return socket;
 }
 
-// ws2 전용 parse (역방향: 외국어 입력 → 한국어 음성 출력)
+function reconnectSession(){
+  if(!currentKey || !currentSession) return;
+  isReconnecting = true;
+  if(ws){ try{ws.close(1000);}catch(_){} ws=null; }
+  if(ws2){ try{ws2.close(1000);}catch(_){} ws2=null; }
+  ws = openWS(currentKey, currentTargetLang, false, parse, 'ws');
+  if(convMode){
+    ws2 = openWS(currentKey, 'ko', false, parseConvReverse, 'ws2');
+  }
+}
+
 async function parseConvReverse(e){
   let txt=typeof e.data==='string'?e.data:(e.data instanceof Blob?await e.data.text():new TextDecoder().decode(e.data));
   try{
-    const d=JSON.parse(txt);
-    const sc=d.serverContent; if(!sc)return;
-    // 역방향: 외국어→한국어 음성만 재생 (텍스트는 dstBox에 표시)
+    const d=JSON.parse(txt); const sc=d.serverContent; if(!sc)return;
     if(sc.outputTranscription?.text) appendText('dstBox',sc.outputTranscription.text,'ko',dstTimer_,currentSession?.dst||null);
     if(sc.modelTurn?.parts){
       for(const p of sc.modelTurn.parts){
-        if(p.inlineData?.data && p.inlineData.mimeType?.startsWith('audio/')){
+        if(p.inlineData?.data && p.inlineData.mimeType?.startsWith('audio/'))
           playAudioChunk(base64ToFloat32(p.inlineData.data, PLAYBACK_SR));
-        }
       }
     }
   }catch(_){}
 }
 
-function reconnectSession(){
-  if(!currentKey || !currentSession) return;
-  isReconnecting=true;
-  if(ws){try{ws.close(1000);}catch(_){} ws=null;}
-  connectWebSocket(currentKey, currentTargetLang, currentSessionName, resumptionHandle, 'ws', parse);
-}
-
 async function startTranslation(){
   showErr('');
-  const key=document.getElementById('apiKey').value.trim();
-  if(!key){showErr('API Key를 입력해주세요.');return;}
+  const key = document.getElementById('apiKey').value.trim();
+  if(!key){ showErr('API Key를 입력해주세요.'); return; }
 
-  // 모드에 따라 언어 결정
   let targetLang, sessionName;
   if(convMode){
-    const fl = document.getElementById('convLang').value; // 상대방 언어
-    targetLang = fl;   // ws: 한국어→외국어
+    targetLang = document.getElementById('convLang').value;
     sessionName = '대화 ' + dateStr();
   } else {
-    const val = document.getElementById('meetingLang').value;
-    const[tl] = val.split('|');
+    const[tl] = document.getElementById('meetingLang').value.split('|');
     targetLang = tl;
     sessionName = document.getElementById('sessionName').value.trim() || ('세션 '+dateStr());
   }
   updateLabels();
 
-  // 기존 세션 데이터가 있으면 이어서 할지 묻기 (회의 모드만)
-  const hasExisting = !convMode && currentSession && (currentSession.src.length > 0 || currentSession.dst.length > 0);
+  // 기존 데이터 있으면 이어서 여부 확인 (회의 모드만)
+  const hasExisting = !convMode && currentSession && (currentSession.src.length>0 || currentSession.dst.length>0);
+  let keepSession = false;
   if(hasExisting){
-    const cont = confirm(
-      '기존 세션 "' + currentSession.name + '"에 내용이 있습니다.\n\n' +
-      '확인: 기존 세션에 이어서 기록\n취소: 새 세션으로 시작'
-    );
-    if(cont){
-      currentKey=key; currentTargetLang=targetLang; currentSessionName=currentSession.name; resumptionHandle=null;
-    } else {
-      currentKey=key; currentTargetLang=targetLang; currentSessionName=sessionName; resumptionHandle=null;
-      currentSession={ name:sessionName, startTime:new Date().toISOString(), startTimeStr:dateStr(), lang:(convMode?'conv':document.getElementById('meetingLang').value), src:[], dst:[], summary:'' };
-      document.getElementById('srcBox').innerHTML=''; document.getElementById('dstBox').innerHTML='';
-      updateCurrentCard(); updateCtrlSession();
-    }
-  } else {
-    currentKey=key; currentTargetLang=targetLang; currentSessionName=sessionName; resumptionHandle=null;
-    currentSession={ name:sessionName, startTime:new Date().toISOString(), startTimeStr:dateStr(), lang:(convMode?'conv|auto':document.getElementById('meetingLang')?.value||'ko|auto'), src:[], dst:[], summary:'' };
-    updateCurrentCard(); updateCtrlSession();
+    keepSession = confirm('기존 세션 "'+currentSession.name+'"에 내용이 있습니다.\n\n확인: 이어서 기록\n취소: 새 세션으로 시작');
   }
 
-  // 설정 패널 자동 닫기
-  const panel=document.getElementById('settingsPanel');
-  const toggleBtn=document.getElementById('settingsToggle');
+  currentKey = key;
+  currentTargetLang = targetLang;
+  currentSessionName = keepSession ? currentSession.name : sessionName;
+  resumptionHandle = null;
+
+  if(!keepSession){
+    currentSession = {
+      id: 's_'+Date.now(),
+      name: currentSessionName,
+      startTime: new Date().toISOString(),
+      startTimeStr: dateStr(),
+      lang: convMode ? ('conv|'+document.getElementById('convLang').value) : (document.getElementById('meetingLang')?.value||'ko|auto'),
+      src:[], dst:[], summary:''
+    };
+    if(!hasExisting){
+      document.getElementById('srcBox').innerHTML='';
+      document.getElementById('dstBox').innerHTML='';
+    }
+    updateCurrentCard();
+    updateCtrlSession();
+  }
+
+  // 설정 패널 닫기
+  const panel = document.getElementById('settingsPanel');
   if(panel && !panel.classList.contains('collapsed')){
     panel.classList.add('collapsed');
-    if(toggleBtn) toggleBtn.classList.remove('open');
+    document.getElementById('settingsToggle')?.classList.remove('open');
   }
 
-  try{stream=await navigator.mediaDevices.getUserMedia({audio:{sampleRate:SR,channelCount:1,echoCancellation:true,noiseSuppression:true},video:false});}
-  catch(err){showErr('마이크 권한 필요: '+err.message);return;}
+  try{
+    stream = await navigator.mediaDevices.getUserMedia({audio:{sampleRate:SR,channelCount:1,echoCancellation:true,noiseSuppression:true},video:false});
+  } catch(err){ showErr('마이크 권한 필요: '+err.message); return; }
 
-  actx=new(window.AudioContext||window.webkitAudioContext)({sampleRate:SR});
-  // proc는 connectWebSocket 내부에서 생성 (ws 연결 후)
-
+  actx = new (window.AudioContext||window.webkitAudioContext)({sampleRate:SR});
   setStatus('','연결 중...');
-  document.getElementById('startBtn').disabled=true;
+  document.getElementById('startBtn').disabled = true;
 
   if(convMode){
     const fl = document.getElementById('convLang').value;
-    // ws: 한국어→외국어 음성 (내 말을 상대방 언어로)
-    connectWebSocket(key, fl, sessionName, null, 'ws', parse);
-    // ws2: 외국어→한국어 음성 (상대방 말을 내가 한국어로 들음)
-    connectWebSocket(key, 'ko', sessionName, null, 'ws2', parseConvReverse);
-    setStatus('recording', '🗣 대화 모드 — 한국어 ↔ '+(langName[fl]||fl)+' 음성 통역 중');
+    // echo=false 필수: true면 이미 대상 언어인 발화도 되읽어서 음성이 2중으로 겹침
+    ws  = openWS(key, fl,   false, parse,            'ws');   // 내 한국어 → 외국어 음성
+    ws2 = openWS(key, 'ko', false, parseConvReverse, 'ws2');  // 상대 외국어 → 한국어 음성
   } else {
-    connectWebSocket(key, targetLang, sessionName, null, 'ws', parse);
+    ws = openWS(key, targetLang, false, parse, 'ws');
   }
 }
 
@@ -705,7 +778,21 @@ function cleanup(){
   if(srcTimer_.id){clearTimeout(srcTimer_.id);srcTimer_.id=null;}
   if(dstTimer_.id){clearTimeout(dstTimer_.id);dstTimer_.id=null;}
   document.querySelectorAll('.para.active').forEach(p=>p.classList.remove('active'));
-  setStatus('','대기 중');
+  stopElapsed();
+  releaseWakeLock();
+
+  // 내용이 있으면 자동 저장 — 저장 버튼을 잊어도 회의록이 남도록
+  if(currentSession && (currentSession.src.length||currentSession.dst.length)){
+    if(upsertSession(currentSession)){
+      renderSessionList();
+      setStatus('','대기 중 · 회의록 자동 저장됨');
+    } else {
+      setStatus('','대기 중');
+    }
+  } else {
+    setStatus('','대기 중');
+  }
+
   document.getElementById('startBtn').disabled=false;
   document.getElementById('stopBtn').disabled=true;
   updateCurrentCard();
@@ -725,9 +812,8 @@ function updateCurrentCard(){
     metaEl.textContent='번역 탭에서 세션명을 입력하고 시작하세요';
     actions.style.display='none';
   } else {
-    const[dst,src]=currentSession.lang.split('|');
     nameEl.textContent=currentSession.name;
-    metaEl.textContent=currentSession.startTimeStr+' · '+(langName[src]||src)+' → '+(langName[dst]||dst)+' · '+currentSession.dst.length+'개 문단';
+    metaEl.textContent=currentSession.startTimeStr+' · '+langPairLabel(currentSession.lang)+' · '+currentSession.dst.length+'개 문단';
     actions.style.display='flex';
   }
 }
@@ -745,16 +831,32 @@ function setSessions(arr){
   localStorage.setItem('gt_sessions',JSON.stringify(arr));
 }
 
+// 세션을 id 기준으로 저장/갱신 (중복 누적 방지)
+function upsertSession(session){
+  if(!session || (!session.src.length && !session.dst.length)) return false;
+  if(!session.id) session.id='s_'+Date.now();
+  try{
+    const arr=getSessions();
+    const i=arr.findIndex(s=>s.id===session.id);
+    const copy=JSON.parse(JSON.stringify(session));
+    if(i>=0) arr[i]=copy; else arr.unshift(copy);
+    setSessions(arr);
+    return true;
+  }catch(err){
+    showErr('저장 공간이 부족합니다. 오래된 회의록을 삭제해주세요.');
+    return false;
+  }
+}
+
 function saveCurrentSession(){
   if(!currentSession||(!currentSession.src.length&&!currentSession.dst.length)){alert('저장할 내용이 없습니다.');return;}
-  const sessions=getSessions();
-  const id='s_'+Date.now();
-  sessions.unshift({...currentSession, id});
-  setSessions(sessions);
+  const ok=upsertSession(currentSession);   // 같은 세션이면 갱신, 새 세션이면 추가
   renderSessionList();
   const btn=document.querySelector('.btn-save');
-  btn.textContent='✅ 저장됨';
-  setTimeout(()=>{btn.textContent='💾 저장';},1500);
+  if(btn){
+    btn.textContent = ok ? '✅ 저장됨' : '⚠️ 실패';
+    setTimeout(()=>{btn.textContent='💾 저장';},1500);
+  }
 }
 
 function renderSessionList(){
@@ -766,7 +868,7 @@ function renderSessionList(){
     return `<div class="session-item" onclick="openModal('${s.id}')">
       <div class="session-info">
         <div class="sname">${s.name}</div>
-        <div class="smeta">${s.startTimeStr} · ${langName[src]||src} → ${langName[dst]||dst} · ${s.dst.length}개 문단</div>
+        <div class="smeta">${s.startTimeStr} · ${langPairLabel(s.lang)} · ${s.dst.length}개 문단</div>
       </div>
       <button class="session-del" onclick="deleteSession(event,'${s.id}')">삭제</button>
     </div>`;
@@ -782,10 +884,9 @@ function deleteSession(e,id){
 
 // ── 세션 텍스트 빌드 ──
 function buildFullText(session){
-  const[dst,src]=session.lang.split('|');
   let txt='# '+session.name+'\n';
   txt+='일시: '+session.startTimeStr+'\n';
-  txt+='언어: '+(langName[src]||src)+' → '+(langName[dst]||dst)+'\n\n';
+  txt+='언어: '+langPairLabel(session.lang)+'\n\n';
   txt+='---\n\n';
   const maxLen=Math.max(session.src.length,session.dst.length);
   for(let i=0;i<maxLen;i++){
@@ -928,7 +1029,6 @@ function fixModalBodyHeight(){
 
 function renderModalBody(){
   const session=modalSession;
-  const[dst,src]=session.lang.split('|');
 
   document.getElementById('modalTitle').textContent=session.name;
   document.getElementById('modalTitle').classList.remove('hidden');
@@ -937,7 +1037,7 @@ function renderModalBody(){
 
   const body=document.getElementById('modalBody');
   body.className = editMode ? 'edit-mode' : '';
-  body.innerHTML='<div style="font-size:12px;color:#555;margin-bottom:12px;">'+session.startTimeStr+' · '+(langName[src]||src)+' → '+(langName[dst]||dst)+'</div>';
+  body.innerHTML='<div style="font-size:12px;color:#555;margin-bottom:12px;">'+session.startTimeStr+' · '+langPairLabel(session.lang)+'</div>';
 
   // 원문/번역 표시 (data-type, data-idx로 편집 시 추적)
   const maxLen=Math.max(session.src.length,session.dst.length);
