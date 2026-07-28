@@ -2,6 +2,8 @@
 <!DOCTYPE html>
 <!--
   Gemini Live Translate
+  v1.9  2026.07.28  음성 끊김 해결(지터 버퍼·청크 병합), 음소거 버튼,
+                    언어 변경 시 문단 분리 + 언어 태그
   v1.8  2026.07.28  setup 필드 위치 수정(contextWindowCompression), 구성 폴백,
                     재연결 횟수 제한, 오류 사유 표시, 버전 표기
   v1.7  2026.07.28  대화 모드(양방향 음성) 추가, echo 중복출력 수정,
@@ -46,6 +48,8 @@
   .voice-toggle.on { color: #30d158; border-color: #30d15844; background: #30d15811; }
   .mode-btn { font-size: 12px; padding: 4px 9px; border-radius: 7px; border: 0.5px solid #444; background: transparent; color: #888; cursor: pointer; flex-shrink: 0; white-space: nowrap; }
   .mode-btn.conv { background: #2a1a3a; color: #bf5fff; border-color: #bf5fff55; }
+  .mute-btn { font-size: 14px; padding: 4px 8px; border-radius: 7px; border: 0.5px solid #333; background: transparent; color: #777; cursor: pointer; flex-shrink: 0; }
+  .mute-btn.on { color: #30d158; border-color: #30d15844; background: #30d15811; }
   .conv-banner { padding: 6px 1rem; font-size: 12px; color: #bf5fff; background: #1a0d2a; border-bottom: 0.5px solid #bf5fff33; flex-shrink: 0; text-align: center; letter-spacing: 0.03em; }
 
   /* ── 접히는 설정 패널 ── */
@@ -84,6 +88,7 @@
   .para.ko .pt { color: #d0ecd0; }
   .para.fo .pt { color: #a9cbff; }
   .para .pt { font-size: var(--pt-size, 15px); }
+  .lang-tag { display:inline-block; font-size:9px; color:#7a7a7a; border:0.5px solid #3a3a3a; border-radius:3px; padding:0 4px; margin-right:6px; vertical-align:1px; letter-spacing:0.05em; }
   .elapsed { font-size: 11px; color: #666; font-variant-numeric: tabular-nums; }
   .font-ctrl { display: flex; gap: 4px; flex-shrink: 0; }
   .font-ctrl button { padding: 1px 7px; font-size: 11px; background: transparent; color: #777; border: 0.5px solid #333; border-radius: 5px; }
@@ -171,6 +176,7 @@
     <button id="clearBtn" onclick="clearAll()">지우기</button>
     <!-- 모드 전환 -->
     <button class="mode-btn" id="modeBtn" onclick="toggleMode()">📋 회의</button>
+    <button class="mute-btn" id="muteBtn" onclick="toggleMute()" title="음성 출력">🔇</button>
     <span class="ctrl-session" id="ctrlSession">—</span>
     <button class="ctrl-toggle" id="settingsToggle" onclick="toggleSettings()" title="설정">⚙️</button>
   </div>
@@ -208,7 +214,7 @@
         <option value="ja">일본어</option>
       </select>
     </div>
-    <div class="version-tag">v1.8 · 2026.07.28</div>
+    <div class="version-tag">v1.9 · 2026.07.28</div>
   </div>
 
   <!-- 대화 모드 안내 배너 -->
@@ -303,7 +309,7 @@
 let ws=null, stream=null, actx=null, proc=null;
 let ws2=null; // 대화 모드 역방향 세션
 let convMode = false;   // false=회의모드, true=대화모드
-let voiceOutputEnabled = false; // 하위 호환용 (대화모드에서 true)
+let muted = true;   // 기본은 음소거 (회의 모드 = 텍스트만)
 let audioQueue = [];
 let isPlayingAudio = false;
 const SR=16000;
@@ -356,26 +362,71 @@ function langPairLabel(langStr){
 }
 function dateStr(){return new Date().toLocaleString('ko-KR',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'});}
 
+// 텍스트의 문자 종류로 언어를 판정한다.
+// 자동감지 회의에서 언어가 바뀌면 발언자가 바뀐 것으로 보고 문단을 나눈다.
+function detectScript(s){
+  if(!s) return '';
+  let ko=0, ja=0, zh=0, la=0;
+  for(const ch of s){
+    const c=ch.codePointAt(0);
+    if((c>=0xAC00&&c<=0xD7AF)||(c>=0x1100&&c<=0x11FF)||(c>=0x3130&&c<=0x318F)) ko++;
+    else if((c>=0x3040&&c<=0x309F)||(c>=0x30A0&&c<=0x30FF)) ja++;   // 가나
+    else if(c>=0x4E00&&c<=0x9FFF) zh++;                              // 한자
+    else if((c>=0x41&&c<=0x5A)||(c>=0x61&&c<=0x7A)) la++;
+  }
+  // 글자 수 비교가 아니라 우선순위로 판정한다.
+  // 한국어·중국어 화자는 영어 단어를 섞어 쓰지만("그래서 investors Yes"),
+  // 영어 화자가 한글이나 한자를 말하는 일은 없기 때문이다.
+  if(ja>0) return 'ja';            // 가나가 있으면 일본어 확정
+  if(ko>0) return 'ko';
+  if(zh>0) return 'zh';
+  if(la>=3) return 'en';           // 짧은 조각("to")은 보류해 문단을 끊지 않음
+  return '';                       // 판정 보류 → 현재 문단 유지
+}
+const scriptTag={ko:'KO', en:'EN', zh:'ZH', ja:'JA'};
+
 // 사용자가 위로 스크롤해 읽는 중이면 자동 스크롤을 멈춤
 function isNearBottom(el){ return (el.scrollHeight - el.scrollTop - el.clientHeight) < 80; }
 
-function appendText(boxId, text, cls, timerRef, storeArr){
+// groupKey: 같은 묶음인지 판단하는 키(감지된 언어 또는 출력 방향).
+// 침묵 2.5초 외에도 이 키가 바뀌면 문단을 나눈다.
+function appendText(boxId, text, cls, timerRef, storeArr, groupKey){
   if(!text||!text.trim())return;
   const box=document.getElementById(boxId);
   const stick=isNearBottom(box);          // 추가 전에 위치 판단
   if(timerRef.id){clearTimeout(timerRef.id);timerRef.id=null;}
-  const last=box.lastElementChild;
-  if(last&&last.classList.contains('active')){
+
+  const gk = groupKey || '';
+  const last = box.lastElementChild;
+  const prevGk = last ? (last.dataset.gk||'') : '';
+  // 판정 보류('')이거나 이전과 같으면 이어 쓰고, 실제로 바뀌면 새 문단
+  const sameGroup = !gk || !prevGk || prevGk===gk;
+  const canAppend = last && last.classList.contains('active') && sameGroup;
+
+  if(canAppend){
     last.querySelector('.pt').textContent+=' '+text.trim();
     if(storeArr&&storeArr.length) storeArr[storeArr.length-1].text+=' '+text.trim();
+    // 이전이 보류 상태였다면 이제 확정된 언어로 채워 넣는다
+    if(!prevGk && gk){
+      last.dataset.gk=gk;
+      const tag=last.querySelector('.lang-tag');
+      if(tag && scriptTag[gk]) tag.textContent=scriptTag[gk];
+      if(storeArr&&storeArr.length) storeArr[storeArr.length-1].lang=gk;
+    }
   } else {
     const p=document.createElement('div');
     p.className='para active'+(cls?' '+cls:'');
+    p.dataset.gk=gk;
     const tsEl=document.createElement('span'); tsEl.className='ts'; tsEl.textContent=ts();
+    p.appendChild(tsEl);
+    if(scriptTag[gk]){
+      const tg=document.createElement('span'); tg.className='lang-tag'; tg.textContent=scriptTag[gk];
+      p.appendChild(tg);
+    }
     const ptEl=document.createElement('span'); ptEl.className='pt'; ptEl.textContent=text.trim();
-    p.appendChild(tsEl); p.appendChild(ptEl);
+    p.appendChild(ptEl);
     box.appendChild(p);
-    if(storeArr) storeArr.push({time:ts(), text:text.trim()});
+    if(storeArr) storeArr.push({time:ts(), text:text.trim(), lang:gk});
   }
   if(stick) box.scrollTop=box.scrollHeight;
   timerRef.id=setTimeout(()=>{
@@ -432,9 +483,31 @@ function toggleSettings(){
   btn.classList.toggle('open', !collapsed);
 }
 
+function toggleMute(){
+  muted = !muted;
+  const b=document.getElementById('muteBtn');
+  b.textContent = muted ? '🔇' : '🔊';
+  b.classList.toggle('on', !muted);
+  if(muted){
+    // 대기 중인 소리를 즉시 버려서 음소거가 바로 걸리도록
+    if(flushT){ clearTimeout(flushT); flushT=null; }
+    pendBufs=[]; pendLen=0;
+  } else {
+    initPlayback();   // 버튼 클릭 = 사용자 조작이므로 이 시점에 오디오를 열 수 있다
+  }
+  localStorage.setItem('gt_muted', muted?'1':'0');
+}
+
+function setMute(v){
+  muted=v;
+  const b=document.getElementById('muteBtn');
+  if(b){ b.textContent = muted?'🔇':'🔊'; b.classList.toggle('on', !muted); }
+  localStorage.setItem('gt_muted', muted?'1':'0');
+}
+
 function toggleMode(){
   convMode = !convMode;
-  voiceOutputEnabled = convMode;
+  setMute(!convMode);   // 회의 모드는 음소거, 대화 모드는 음성 켬
   const btn = document.getElementById('modeBtn');
   const banner = document.getElementById('convBanner');
   const sgMeeting = document.getElementById('sgMeetingLang');
@@ -474,24 +547,71 @@ function base64ToFloat32(b64, sampleRate){
   return float32;
 }
 
-async function playAudioChunk(float32data){
-  if(!voiceOutputEnabled) return;
-  // 재생용 AudioContext는 마이크용과 별도로 관리
-  if(!window.playActx || window.playActx.state==='closed'){
-    window.playActx = new (window.AudioContext||window.webkitAudioContext)({sampleRate:PLAYBACK_SR});
-    window.audioEndTime = 0;   // 새 컨텍스트면 재생 스케줄 초기화
-  }
-  const ctx = window.playActx;
-  if(ctx.state==='suspended') await ctx.resume();
-  const buf = ctx.createBuffer(1, float32data.length, PLAYBACK_SR);
-  buf.copyToChannel(float32data, 0);
-  const src = ctx.createBufferSource();
-  src.buffer = buf;
-  src.connect(ctx.destination);
-  // 큐 기반 순차 재생
-  const startTime = Math.max(ctx.currentTime, (window.audioEndTime||0));
-  src.start(startTime);
-  window.audioEndTime = startTime + buf.duration;
+// ══════════════════════════════════════
+// 음성 재생 — 지터 버퍼 + 청크 병합 스케줄러
+//
+// 이전 구현이 두세 음절마다 끊긴 이유:
+//  (1) 여유 시간 없이 ctx.currentTime에 바로 재생을 걸어서
+//      네트워크가 조금만 늦어도 소리가 비어버림
+//  (2) 서버가 보내는 작은 PCM 조각을 하나씩 따로 재생해 이음새가 들림
+//  (3) 재생 경로에 await가 있어 동시 호출 시 재생 시점 계산이 뒤엉킴
+//  (4) 사용자 조작 밖에서 AudioContext를 만들어 iOS가 정지 상태로 둠
+// ══════════════════════════════════════
+let playCtx = null;
+let playHead = 0;        // 다음 소리를 배치할 시각
+let pendBufs = [];       // 병합 대기 조각
+let pendLen = 0;
+let flushT = null;
+const LOOKAHEAD = 0.22;  // 220ms 여유 — 네트워크 흔들림 흡수
+const MIN_CHUNK = 0.12;  // 120ms 이상 모아서 한 번에 재생
+
+// 반드시 사용자 조작(시작/음소거 해제) 시점에 호출 — iOS 자동재생 제한 통과용
+function initPlayback(){
+  try{
+    if(!playCtx || playCtx.state==='closed'){
+      playCtx = new (window.AudioContext||window.webkitAudioContext)({sampleRate:PLAYBACK_SR});
+    }
+    if(playCtx.state==='suspended') playCtx.resume();
+    // 무음 1샘플을 재생해 오디오 출력을 열어둔다
+    const b=playCtx.createBuffer(1,1,PLAYBACK_SR);
+    const s=playCtx.createBufferSource(); s.buffer=b;
+    s.connect(playCtx.destination); s.start(0);
+  }catch(_){}
+  playHead=0; pendBufs=[]; pendLen=0;
+}
+
+function playAudioChunk(f32){
+  if(muted || !playCtx || playCtx.state==='closed') return;
+  pendBufs.push(f32); pendLen += f32.length;
+  if(pendLen >= PLAYBACK_SR*MIN_CHUNK) flushAudio();
+  else if(!flushT) flushT = setTimeout(flushAudio, 60);  // 마지막 조각도 늦지 않게
+}
+
+function flushAudio(){
+  if(flushT){ clearTimeout(flushT); flushT=null; }
+  if(!playCtx || playCtx.state==='closed' || !pendBufs.length) return;
+
+  const total=pendLen;
+  const merged=new Float32Array(total);
+  let off=0; for(const b of pendBufs){ merged.set(b,off); off+=b.length; }
+  pendBufs=[]; pendLen=0;
+
+  const buf=playCtx.createBuffer(1,total,PLAYBACK_SR);
+  buf.copyToChannel(merged,0);
+  const src=playCtx.createBufferSource();
+  src.buffer=buf; src.connect(playCtx.destination);
+
+  const now=playCtx.currentTime;
+  // 재생 시점이 현재를 지나쳤으면 여유를 다시 확보 (끊김 대신 짧은 지연을 택함)
+  if(playHead < now + 0.02) playHead = now + LOOKAHEAD;
+  try{ src.start(playHead); }catch(_){ return; }
+  playHead += buf.duration;
+}
+
+function stopPlayback(){
+  if(flushT){ clearTimeout(flushT); flushT=null; }
+  pendBufs=[]; pendLen=0; playHead=0;
+  if(playCtx){ try{ playCtx.close(); }catch(_){} playCtx=null; }
 }
 
 // ── 설정 저장/불러오기 ──
@@ -516,6 +636,8 @@ function loadSettings(){
   const fs = parseInt(localStorage.getItem('gt_fontsize')||'15',10);
   if(fs>=11 && fs<=26) applyFont(fs);
   if(localStorage.getItem('gt_mode')==='1' && !convMode) toggleMode();
+  const mv = localStorage.getItem('gt_muted');
+  if(mv!==null) setMute(mv==='1');   // 저장된 음소거 상태 복원 (모드 기본값보다 우선)
   updateLabels();
 }
 
@@ -608,15 +730,17 @@ async function parse(e){
     const dstArr=currentSession?currentSession.dst:null;
     // 대화 모드에서 ws의 출력은 외국어이므로 별도 색상(fo)으로 구분
     const outCls = convMode ? 'fo' : 'ko';
-    if(sc.inputTranscription?.text) appendText('srcBox',sc.inputTranscription.text,'',srcTimer_,srcArr);
-    if(sc.outputTranscription?.text) appendText('dstBox',sc.outputTranscription.text,outCls,dstTimer_,dstArr);
+    if(sc.inputTranscription?.text)
+      appendText('srcBox',sc.inputTranscription.text,'',srcTimer_,srcArr,detectScript(sc.inputTranscription.text));
+    if(sc.outputTranscription?.text)
+      appendText('dstBox',sc.outputTranscription.text,outCls,dstTimer_,dstArr,outCls);
 
     if(sc.modelTurn?.parts){
       for(const p of sc.modelTurn.parts){
-        if(convMode && p.inlineData?.data && p.inlineData.mimeType?.startsWith('audio/')){
+        if(!muted && p.inlineData?.data && p.inlineData.mimeType?.startsWith('audio/')){
           playAudioChunk(base64ToFloat32(p.inlineData.data, PLAYBACK_SR));
         }
-        if(p.text) appendText('dstBox',p.text,outCls,dstTimer_,dstArr);
+        if(p.text) appendText('dstBox',p.text,outCls,dstTimer_,dstArr,outCls);
       }
     }
   }catch(_){}
@@ -744,10 +868,10 @@ async function parseConvReverse(e){
   let txt=typeof e.data==='string'?e.data:(e.data instanceof Blob?await e.data.text():new TextDecoder().decode(e.data));
   try{
     const d=JSON.parse(txt); const sc=d.serverContent; if(!sc)return;
-    if(sc.outputTranscription?.text) appendText('dstBox',sc.outputTranscription.text,'ko',dstTimer_,currentSession?.dst||null);
+    if(sc.outputTranscription?.text) appendText('dstBox',sc.outputTranscription.text,'ko',dstTimer_,currentSession?.dst||null,'ko');
     if(sc.modelTurn?.parts){
       for(const p of sc.modelTurn.parts){
-        if(p.inlineData?.data && p.inlineData.mimeType?.startsWith('audio/'))
+        if(!muted && p.inlineData?.data && p.inlineData.mimeType?.startsWith('audio/'))
           playAudioChunk(base64ToFloat32(p.inlineData.data, PLAYBACK_SR));
       }
     }
@@ -813,6 +937,7 @@ async function startTranslation(){
   } catch(err){ showErr('마이크 권한 필요: '+err.message); return; }
 
   actx = new (window.AudioContext||window.webkitAudioContext)({sampleRate:SR});
+  if(!muted) initPlayback();   // 시작 버튼 = 사용자 조작이므로 여기서 오디오를 열어야 한다
   setStatus('','연결 중...');
   document.getElementById('startBtn').disabled = true;
 
@@ -829,7 +954,7 @@ async function startTranslation(){
 function cleanup(){
   if(proc){try{proc.disconnect();}catch(_){}proc=null;}
   if(actx){try{actx.close();}catch(_){}actx=null;}
-  if(window.playActx){try{window.playActx.close();}catch(_){} window.playActx=null; window.audioEndTime=0;}
+  stopPlayback();
   if(stream){stream.getTracks().forEach(t=>t.stop());stream=null;}
   if(ws){try{ws.close(1000);}catch(_){}ws=null;}
   if(ws2){try{ws2.close(1000);}catch(_){}ws2=null;}
