@@ -2,6 +2,8 @@
 <!DOCTYPE html>
 <!--
   Gemini Live Translate
+  v2.2  2026.07.28  사후 번역 보정(완결 문단을 맥락 기반으로 재번역),
+                    보정 켜기/끄기 토글
   v2.1  2026.07.28  문장이 끝나는 지점에서만 문단 분리(문장 중간 절단 방지),
                     번역문이 문장을 끝낸 뒤 문단 이동
   v2.0  2026.07.28  원문·번역 문단번호 공유(좌우 동시 분리), 길이 초과 시 분리,
@@ -54,6 +56,10 @@
   .mode-btn.conv { background: #2a1a3a; color: #bf5fff; border-color: #bf5fff55; }
   .mute-btn { font-size: 14px; padding: 4px 8px; border-radius: 7px; border: 0.5px solid #333; background: transparent; color: #777; cursor: pointer; flex-shrink: 0; }
   .mute-btn.on { color: #30d158; border-color: #30d15844; background: #30d15811; }
+  .refine-btn { font-size:12px; padding:4px 9px; border-radius:7px; border:0.5px solid #444; background:transparent; color:#888; cursor:pointer; flex-shrink:0; white-space:nowrap; }
+  .refine-btn.on { color:#f0c674; border-color:#f0c67455; background:#f0c67411; }
+  .refine-tag { display:inline-block; font-size:9px; color:#f0c674; border:0.5px solid #f0c67455; border-radius:3px; padding:0 4px; margin-right:6px; vertical-align:1px; letter-spacing:0.04em; }
+  .refining { opacity:0.75; }
   .conv-banner { padding: 6px 1rem; font-size: 12px; color: #bf5fff; background: #1a0d2a; border-bottom: 0.5px solid #bf5fff33; flex-shrink: 0; text-align: center; letter-spacing: 0.03em; }
 
   /* ── 접히는 설정 패널 ── */
@@ -190,6 +196,7 @@
     <!-- 모드 전환 -->
     <button class="mode-btn" id="modeBtn" onclick="toggleMode()">📋 회의</button>
     <button class="mute-btn" id="muteBtn" onclick="toggleMute()" title="음성 출력">🔇</button>
+    <button class="refine-btn on" id="refineBtn" onclick="toggleRefine()" title="문단이 끝나면 번역을 다시 다듬습니다">✨ 다듬기</button>
     <span class="ctrl-session" id="ctrlSession">—</span>
     <button class="ctrl-toggle" id="settingsToggle" onclick="toggleSettings()" title="설정">⚙️</button>
   </div>
@@ -227,7 +234,7 @@
         <option value="ja">일본어</option>
       </select>
     </div>
-    <div class="version-tag">v2.1 · 2026.07.28</div>
+    <div class="version-tag">v2.2 · 2026.07.28</div>
   </div>
 
   <!-- 대화 모드 안내 배너 -->
@@ -404,6 +411,97 @@ function isNearBottom(el){ return (el.scrollHeight - el.scrollTop - el.clientHei
 // groupKey: 같은 묶음인지 판단하는 키(감지된 언어 또는 출력 방향).
 // 침묵 2.5초 외에도 이 키가 바뀌면 문단을 나눈다.
 // ══════════════════════════════════════
+// 사후 번역 보정 — 완결된 문단을 텍스트 모델로 다시 번역해 교체
+// ══════════════════════════════════════
+function scheduleRefine(seg){
+  if(!refineOn || convMode) return;
+  if(refinedSegs.has(seg)) return;
+  refinedSegs.add(seg);
+  refineQueue.push(seg);
+  setTimeout(runRefineQueue, 1500);   // 늦게 도착하는 조각을 기다린다
+}
+
+async function runRefineQueue(){
+  if(refineBusy || !refineQueue.length) return;
+  refineBusy = true;
+  const seg = refineQueue.shift();
+  try{ await refineSegment(seg); }catch(_){}
+  refineBusy = false;
+  if(refineQueue.length) setTimeout(runRefineQueue, 250);
+}
+
+function segTexts(seg){
+  const key=String(seg);
+  const src=(currentSession?.src||[]).filter(x=>String(x.seg)===key);
+  const dst=(currentSession?.dst||[]).filter(x=>String(x.seg)===key);
+  return { key, src, dst,
+    srcTxt: src.map(x=>x.text).join(' ').trim(),
+    dstTxt: dst.map(x=>x.text).join(' ').trim() };
+}
+
+async function refineSegment(seg){
+  if(!currentSession) return;
+  const apiKey=document.getElementById('apiKey').value.trim();
+  if(!apiKey) return;
+
+  const t=segTexts(seg);
+  if(t.srcTxt.length < 40 || !t.dstTxt) return;   // 너무 짧으면 보정 이득이 없다
+
+  const tgt = (currentSession.lang||'ko|auto').split('|')[0];
+  const tgtName = langName[tgt] || '한국어';
+
+  const prompt =
+    '아래는 회의 실시간 통역 결과다. 원문 전체 맥락을 보고 번역을 정확하고 자연스럽게 다듬어라.\n\n'
+    + '규칙:\n'
+    + '- 숫자, 비율, 금액, 날짜는 원문 그대로 유지한다. 임의로 바꾸거나 추측하지 않는다.\n'
+    + '- 실시간 번역이 어순이나 부정을 잘못 처리한 부분을 원문에 맞게 바로잡는다.\n'
+    + '- 원문에 없는 내용을 새로 만들지 않는다. 불확실하면 원래 번역을 유지한다.\n'
+    + '- 설명·머리말·따옴표 없이 다듬은 ' + tgtName + ' 번역문만 출력한다.\n\n'
+    + '[원문]\n' + t.srcTxt.slice(0,4000) + '\n\n'
+    + '[실시간 번역]\n' + t.dstTxt.slice(0,4000);
+
+  const res = await fetch('https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key='+apiKey,{
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({
+      contents:[{parts:[{text:prompt}]}],
+      generationConfig:{ temperature:0.2 }
+    })
+  });
+  if(!res.ok) return;
+  const data = await res.json();
+  let out = (data.candidates?.[0]?.content?.parts?.[0]?.text || '').trim();
+  if(!out) return;
+  out = out.replace(/^```[a-z]*\s*/i,'').replace(/```$/,'').trim();
+
+  // 결과가 비정상적으로 짧거나 길면 신뢰하지 않고 원래 번역을 유지한다
+  if(out.length < t.dstTxt.length*0.4 || out.length > t.dstTxt.length*3) return;
+
+  applyRefined(t, out);
+}
+
+function applyRefined(t, refined){
+  // 화면 갱신 — 해당 문단의 번역 조각들을 하나로 합쳐 교체
+  const box=document.getElementById('dstBox');
+  const paras=[...box.querySelectorAll('.para')].filter(p=>p.dataset.gk===t.key);
+  if(paras.length){
+    const first=paras[0];
+    first.querySelector('.pt').textContent = refined;
+    if(!first.querySelector('.refine-tag')){
+      const tag=document.createElement('span');
+      tag.className='refine-tag'; tag.textContent='다듬음';
+      first.insertBefore(tag, first.querySelector('.pt'));
+    }
+    paras.slice(1).forEach(p=>p.remove());
+  }
+  // 저장 데이터 갱신 — 회의록·요약·다운로드에 반영
+  if(t.dst.length && currentSession){
+    const keep=t.dst[0];
+    keep.text=refined; keep.refined=true;
+    currentSession.dst = currentSession.dst.filter(x=>String(x.seg)!==t.key || x===keep);
+  }
+}
+
+// ══════════════════════════════════════
 // 문단 관리 — 원문/번역이 같은 문단번호(segId)를 공유한다.
 // 이렇게 해야 좌우 화면이 동시에 나뉘고 회의록에서 원문·번역이 정확히 짝지어진다.
 // 문단이 바뀌는 조건: (1) 침묵 2.5초  (2) 원문 언어 변경(발언자 전환)  (3) 길이 초과
@@ -420,6 +518,14 @@ const SEG_HARD_CHARS = 1500;  // 문장 부호가 계속 없으면 이 길이에
 let dstSeg = 0;
 let dstPrevEnded = true;
 
+// ── 사후 번역 보정 ──
+// 실시간 통역은 문장이 끝나기 전에 번역을 내보내므로 어순·부정·중의어에서 오류가 난다.
+// 문단이 완결되면 원문 전체를 다시 보내 정확한 번역으로 교체한다.
+let refineOn = true;
+const refinedSegs = new Set();
+let refineQueue = [];
+let refineBusy = false;
+
 // 문장이 끝났는지 판정 — 영어·한국어(. ! ?)와 중국어·일본어(。！？)를 함께 본다.
 // 뒤에 붙는 인용부호나 괄호도 문장 끝으로 인정한다.
 function endsSentence(t){
@@ -427,7 +533,9 @@ function endsSentence(t){
 }
 
 function bumpSegment(){
+  const finished = segId;      // 지금 떠나는 문단은 완결된 것
   segId++; segLang=''; segChars=0;
+  if(refineOn && !convMode) scheduleRefine(finished);
 }
 
 // 원문이 도착할 때 호출해 문단 전환 여부를 판단한다
@@ -537,6 +645,14 @@ function toggleSettings(){
   const btn = document.getElementById('settingsToggle');
   const collapsed = panel.classList.toggle('collapsed');
   btn.classList.toggle('open', !collapsed);
+}
+
+function toggleRefine(){
+  refineOn = !refineOn;
+  const b=document.getElementById('refineBtn');
+  b.classList.toggle('on', refineOn);
+  b.textContent = refineOn ? '✨ 다듬기' : '✨ 다듬기 끔';
+  localStorage.setItem('gt_refine', refineOn?'1':'0');
 }
 
 function toggleMute(){
@@ -694,6 +810,9 @@ function loadSettings(){
   if(localStorage.getItem('gt_mode')==='1' && !convMode) toggleMode();
   const mv = localStorage.getItem('gt_muted');
   if(mv!==null) setMute(mv==='1');   // 저장된 음소거 상태 복원 (모드 기본값보다 우선)
+  const rv = localStorage.getItem('gt_refine');
+  if(rv==='0'){ refineOn=false; const rb=document.getElementById('refineBtn');
+    if(rb){ rb.classList.remove('on'); rb.textContent='✨ 다듬기 끔'; } }
   updateLabels();
 }
 
@@ -985,6 +1104,7 @@ async function startTranslation(){
     segId = 0;
   }
   segLang=''; segChars=0; dstSeg=segId; dstPrevEnded=true;
+  refinedSegs.clear(); refineQueue=[]; refineBusy=false;
   if(segSilenceT){clearTimeout(segSilenceT);segSilenceT=null;}
 
   if(!keepSession){
@@ -1057,7 +1177,24 @@ function cleanup(){
   document.getElementById('stopBtn').disabled=true;
   updateCurrentCard();
 }
-function stopTranslation(){cleanup();}
+function stopTranslation(){
+  const lastSeg = segId;
+  const hadContent = currentSession && (currentSession.src.length||currentSession.dst.length);
+  cleanup();
+  // 마지막 문단은 bumpSegment를 거치지 않으므로 여기서 직접 보정한다
+  if(refineOn && !convMode && hadContent){
+    const sess = currentSession;
+    scheduleRefine(lastSeg);
+    setStatus('','대기 중 · 마지막 문단 다듬는 중...');
+    const waitDone = ()=>{
+      if(refineBusy || refineQueue.length){ setTimeout(waitDone, 400); return; }
+      if(sess) upsertSession(sess);   // 보정 결과를 저장에 반영
+      renderSessionList();
+      setStatus('','대기 중 · 회의록 저장됨');
+    };
+    setTimeout(waitDone, 1800);
+  }
+}
 
 // ══════════════════════════════════════
 // 회의록 탭
@@ -1384,10 +1521,11 @@ function renderModalBody(){
 
 function renderPara(type, idx, item, cls){
   const editable = editMode ? 'true' : 'false';
+  const rtag = item.refined ? '<span class="refine-tag">다듬음</span>' : '';
   return '<div class="para'+(cls?' '+cls:'')+'" data-type="'+type+'" data-idx="'+idx+'"'
     +' data-seg="'+(item.seg!=null?escapeHtml(item.seg):'')+'"'
     +' data-lang="'+escapeHtml(item.lang||'')+'">'
-    +'<span class="ts">'+escapeHtml(item.time||'')+'</span>'
+    +'<span class="ts">'+escapeHtml(item.time||'')+'</span>'+rtag
     +'<button class="para-del" onclick="deletePara(this)">삭제</button>'
     +'<span class="pt" contenteditable="'+editable+'">'+escapeHtml(item.text)+'</span>'
     +'</div>';
@@ -1437,6 +1575,7 @@ function saveEdit(){
     const item = {time, text};
     if(p.dataset.seg!=='') item.seg = p.dataset.seg;   // 문단 대응 유지
     if(p.dataset.lang)     item.lang = p.dataset.lang;
+    if(p.querySelector('.refine-tag')) item.refined = true;
     if(type==='src') newSrc.push(item);
     else newDst.push(item);
   });
