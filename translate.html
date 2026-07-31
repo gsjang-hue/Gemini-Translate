@@ -2,6 +2,8 @@
 <!DOCTYPE html>
 <!--
   Gemini Live Translate
+  v2.4  2026.07.31  5분 주기 자동 저장, 저장 공간 감시·경고,
+                    2시간 경과 안내, 화면 문단 상한(기록은 보존)
   v2.3  2026.07.28  다운로드 파일 맨 앞에 AI 요약 포함, 문서 구조 정리
   v2.2  2026.07.28  사후 번역 보정(완결 문단을 맥락 기반으로 재번역),
                     보정 켜기/끄기 토글
@@ -113,6 +115,16 @@
   .font-ctrl { display: flex; gap: 4px; flex-shrink: 0; }
   .font-ctrl button { padding: 1px 7px; font-size: 11px; background: transparent; color: #777; border: 0.5px solid #333; border-radius: 5px; }
   .wake-note { font-size: 10px; color: #4a4; }
+  .notice-banner { display:flex; align-items:center; gap:8px; padding:7px 1rem; font-size:12px; flex-shrink:0; line-height:1.5; }
+  .notice-banner.hidden { display:none; }
+  .notice-banner.info   { background:#10202e; color:#8ab4d8; border-bottom:0.5px solid #1e3a52; }
+  .notice-banner.warn   { background:#2a2410; color:#f0c674; border-bottom:0.5px solid #4a3f1a; }
+  .notice-banner.danger { background:#2e1414; color:#ff8a80; border-bottom:0.5px solid #5a2020; }
+  .notice-banner .notice-text { flex:1; }
+  .notice-close { background:transparent; border:none; color:inherit; opacity:0.6; font-size:12px; padding:2px 4px; cursor:pointer; flex-shrink:0; }
+  .save-hint { font-size:10px; color:#4a7a4a; opacity:0.35; transition:opacity 0.3s; white-space:nowrap; }
+  .storage-label { font-size:10px; color:#555; font-weight:400; letter-spacing:0; text-transform:none; }
+  .trim-note { font-size:10px; color:#4a4a4a; border:0.5px dashed #333; border-radius:6px; padding:5px 8px; margin-bottom:10px; line-height:1.5; }
   .version-tag { font-size: 10px; color: #3d3d3d; align-self: flex-end; margin-left: auto; padding-bottom: 2px; letter-spacing: 0.03em; }
 
   /* ── 회의록 탭 ── */
@@ -235,7 +247,7 @@
         <option value="ja">일본어</option>
       </select>
     </div>
-    <div class="version-tag">v2.3 · 2026.07.28</div>
+    <div class="version-tag">v2.4 · 2026.07.31</div>
   </div>
 
   <!-- 대화 모드 안내 배너 -->
@@ -243,10 +255,17 @@
     🗣 대화 모드 — 한국어 ↔ 영어 음성 통역 중
   </div>
 
+  <!-- 공용 안내 배너 (저장 공간·긴 세션 경고) -->
+  <div class="notice-banner hidden" id="noticeBanner">
+    <span class="notice-text"></span>
+    <button class="notice-close" onclick="hideNotice()">✕</button>
+  </div>
+
   <div class="statusbar">
     <span class="dot" id="dot"></span>
     <span id="statusText">대기 중</span>
     <span id="elapsed" class="elapsed"></span>
+    <span id="saveHint" class="save-hint"></span>
     <span class="err" id="err"></span>
     <span class="font-ctrl">
       <button onclick="adjustFont(-1)" title="글자 작게">A−</button>
@@ -293,7 +312,10 @@
     </div>
 
     <!-- 저장된 세션 목록 -->
-    <div class="section-title">저장된 회의록</div>
+    <div class="section-title" style="display:flex;align-items:center;justify-content:space-between;">
+      <span>저장된 회의록</span>
+      <span id="storageLabel" class="storage-label"></span>
+    </div>
     <div id="sessionList"><div class="empty-msg">저장된 세션이 없습니다</div></div>
 
   </div>
@@ -573,6 +595,23 @@ function appendDstText(text, cls, storeArr, wantSeg){
   dstPrevEnded = endsSentence(text);
 }
 
+// 화면에 유지할 문단 수 상한. 넘으면 오래된 것을 화면에서만 정리한다.
+// 회의록 데이터(currentSession)는 그대로 보존되므로 기록은 손실되지 않는다.
+const MAX_DOM_PARAS = 400;
+
+function trimBox(box){
+  const paras=box.querySelectorAll('.para');
+  const excess=paras.length-MAX_DOM_PARAS;
+  if(excess<=0) return;
+  if(!box.querySelector('.trim-note')){
+    const n=document.createElement('div');
+    n.className='trim-note';
+    n.textContent='앞부분 문단은 화면에서만 정리했습니다. 회의록에는 전부 남아 있습니다.';
+    box.insertBefore(n, box.firstChild);
+  }
+  for(let i=0;i<excess;i++) if(paras[i]) paras[i].remove();
+}
+
 function appendText(boxId, text, cls, storeArr, segKey, tagLang){
   if(!text||!text.trim())return;
   const box=document.getElementById(boxId);
@@ -598,6 +637,7 @@ function appendText(boxId, text, cls, storeArr, segKey, tagLang){
     box.appendChild(p);
     if(storeArr) storeArr.push({seg:key, time:ts(), text:text.trim(), lang:tagLang||''});
   }
+  trimBox(box);
   if(stick) box.scrollTop=box.scrollHeight;
 }
 
@@ -627,16 +667,97 @@ document.addEventListener('visibilitychange', ()=>{
   if(document.visibilityState==='visible' && ws && ws.readyState===1 && !wakeLock) acquireWakeLock();
 });
 
+// ── 저장 용량 감시 ──
+// Safari의 사이트당 저장 한도는 약 5MB. 한도를 넘으면 저장이 실패하므로 미리 경고한다.
+const QUOTA_BYTES = 5*1024*1024;
+
+function storageUsedBytes(){
+  let n=0;
+  try{
+    for(let i=0;i<localStorage.length;i++){
+      const k=localStorage.key(i);
+      n += k.length + (localStorage.getItem(k)||'').length;
+    }
+  }catch(_){}
+  return n*2;   // UTF-16 기준 근사치
+}
+
+function storagePct(){ return Math.min(100, Math.round(storageUsedBytes()/QUOTA_BYTES*100)); }
+
+function checkStorage(){
+  const pct=storagePct();
+  updateStorageLabel(pct);
+  if(pct>=90){
+    showNotice('저장 공간이 '+pct+'% 찼습니다. 지금 회의록을 다운로드하고 오래된 기록을 삭제해 주세요.', 'danger');
+  } else if(pct>=70){
+    showNotice('저장 공간 '+pct+'% 사용 중입니다. 오래된 회의록을 정리하는 것이 좋습니다.', 'warn');
+  }
+  return pct;
+}
+
+function updateStorageLabel(pct){
+  const el=document.getElementById('storageLabel');
+  if(!el) return;
+  const v = (pct==null) ? storagePct() : pct;
+  el.textContent='저장 공간 '+v+'% 사용';
+  el.style.color = v>=90 ? '#ff453a' : (v>=70 ? '#f0c674' : '#555');
+}
+
+// ── 공용 안내 배너 ──
+function showNotice(text, kind){
+  const b=document.getElementById('noticeBanner');
+  if(!b) return;
+  b.className='notice-banner '+(kind||'info');
+  b.querySelector('.notice-text').textContent=text;
+  b.classList.remove('hidden');
+}
+function hideNotice(){
+  const b=document.getElementById('noticeBanner');
+  if(b) b.classList.add('hidden');
+}
+
 // ── 경과 시간 ──
 let elapsedInt=null, startedAt=0;
+let longNoticeShown=false;
+
+// ── 주기적 자동 저장 ──
+// 중지 시점에만 저장하면 긴 회의 중 페이지가 죽었을 때 전부 잃는다.
+let autoSaveInt=null;
+const AUTOSAVE_MS = 5*60*1000;   // 5분
+
+function startAutoSave(){
+  clearInterval(autoSaveInt);
+  autoSaveInt=setInterval(()=>{
+    if(!currentSession) return;
+    if(!currentSession.src.length && !currentSession.dst.length) return;
+    if(upsertSession(currentSession)){
+      showSaveHint('자동 저장 ' + new Date().toTimeString().slice(0,5));
+      checkStorage();
+    }
+  }, AUTOSAVE_MS);
+}
+function stopAutoSave(){ clearInterval(autoSaveInt); autoSaveInt=null; }
+
+function showSaveHint(text){
+  const el=document.getElementById('saveHint');
+  if(!el) return;
+  el.textContent='💾 '+text;
+  el.style.opacity='1';
+  setTimeout(()=>{ el.style.opacity='0.35'; }, 2500);
+}
 function startElapsed(){
   startedAt=Date.now();
   clearInterval(elapsedInt);
   elapsedInt=setInterval(()=>{
     const s=Math.floor((Date.now()-startedAt)/1000);
-    const mm=String(Math.floor(s/60)).padStart(2,'0'), ss=String(s%60).padStart(2,'0');
+    const mm=String(Math.floor(s/60)%60).padStart(2,'0'), ss=String(s%60).padStart(2,'0');
     const el=document.getElementById('elapsed');
     if(el) el.textContent=(s>=3600? Math.floor(s/3600)+':' : '')+mm+':'+ss;
+    // 2시간을 넘기면 세션을 나누도록 한 번 안내한다
+    if(s>=7200 && !longNoticeShown){
+      longNoticeShown=true;
+      showNotice('2시간이 지났습니다. 중지 후 새 세션으로 나누면 저장 실패와 성능 저하를 예방할 수 있습니다.', 'warn');
+    }
   },1000);
 }
 function stopElapsed(){ clearInterval(elapsedInt); elapsedInt=null; }
@@ -991,7 +1112,7 @@ function openWS(key, targetLang, isEcho, onMsg, assignTo){
       setStatus('recording', label);
       document.getElementById('stopBtn').disabled = false;
       startMicProcessor();
-      if(!elapsedInt) startElapsed();
+      if(!elapsedInt){ startElapsed(); startAutoSave(); }
       acquireWakeLock();
       isReconnecting = false;
     }
@@ -1106,6 +1227,9 @@ async function startTranslation(){
   }
   segLang=''; segChars=0; dstSeg=segId; dstPrevEnded=true;
   refinedSegs.clear(); refineQueue=[]; refineBusy=false;
+  longNoticeShown=false;
+  hideNotice();
+  checkStorage();   // 시작 전에 저장 공간을 미리 확인
   if(segSilenceT){clearTimeout(segSilenceT);segSilenceT=null;}
 
   if(!keepSession){
@@ -1160,6 +1284,7 @@ function cleanup(){
   if(ws2){try{ws2.close(1000);}catch(_){}ws2=null;}
   if(segSilenceT){clearTimeout(segSilenceT);segSilenceT=null;}
   stopElapsed();
+  stopAutoSave();
   releaseWakeLock();
 
   // 내용이 있으면 자동 저장 — 저장 버튼을 잊어도 회의록이 남도록
@@ -1219,6 +1344,7 @@ function updateCurrentCard(){
 function refreshMinutesTab(){
   updateCurrentCard();
   renderSessionList();
+  updateStorageLabel();
 }
 
 // ── localStorage 세션 관리 ──
@@ -1273,7 +1399,8 @@ function upsertSession(session){
     setSessions(arr);
     return true;
   }catch(err){
-    showErr('저장 공간이 부족합니다. 오래된 회의록을 삭제해주세요.');
+    showErr('저장 공간 부족 — 저장 실패');
+    showNotice('저장 공간이 가득 차 저장하지 못했습니다. 지금 "다운로드"로 파일을 내려받은 뒤 오래된 회의록을 삭제해 주세요.', 'danger');
     return false;
   }
 }
@@ -1310,6 +1437,8 @@ function deleteSession(e,id){
   if(!confirm('삭제하시겠습니까?'))return;
   setSessions(getSessions().filter(s=>s.id!==id));
   renderSessionList();
+  updateStorageLabel();
+  if(storagePct()<70) hideNotice();
 }
 
 // ── 세션 텍스트 빌드 ──
