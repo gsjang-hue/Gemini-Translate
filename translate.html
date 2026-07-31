@@ -2,6 +2,10 @@
 <!DOCTYPE html>
 <!--
   Gemini Live Translate
+  v3.7  2026.08.01  대화 모드가 도중에 완전히 멎는 문제 진단 강화: 지금까지
+                    parse() 오류를 catch(_){}로 조용히 삼켜 "소켓은 열려있는데
+                    반응 없음" 현상의 원인을 알 수 없었다. 이제 처리 중 예외가
+                    나면 진단 줄에 오류 메시지를 그대로 노출한다.
   v3.6  2026.08.01  음성 출력 문제 재수정: 모드별 저장·복원 로직이 계속 어긋나
                     반복 재발해, 대화 모드는 저장값과 무관하게 항상 강제로 음성을
                     켜도록 단순화(모드 전환·세션 시작 두 지점에서 이중 확인).
@@ -293,7 +297,7 @@
       </select>
     </div>
     <a class="manual-link" href="gemini_translate_manual.pdf" target="_blank" rel="noopener" title="사용 매뉴얼 (PDF)">📖 사용법</a>
-    <div class="version-tag">v3.6 · 2026.08.01</div>
+    <div class="version-tag">v3.7 · 2026.08.01</div>
   </div>
 
   <!-- 대화 모드 안내 배너 -->
@@ -607,6 +611,12 @@ const SEG_HARD_CHARS = 1500;     // 문장 부호가 계속 없으면 이 길이
 
 // 소프트 한도를 넘긴 뒤 발견한 "문장이 끝나는 지점" 후보.
 // 곧바로 자르지 않고, 다음에 들어오는 말이 화제를 이어가는지 바꾸는지 보고 나서 정한다.
+// 서버 메시지 처리 중 예외가 나면 지금까지는 catch(_){}로 조용히 삼켜져
+// "소켓은 열려 있는데 아무 반응이 없다"는 현상의 원인을 알 수 없었다.
+// 이제 마지막 오류를 기록해 진단 줄에 그대로 노출한다.
+let lastParseError = null;
+let lastParseErrorAt = 0;
+
 let pendingCandidateLen = null;  // 가장 최근 후보 지점의 누적 글자수
 let pendingSince = null;         // 첫 후보가 나온 시점의 누적 글자수(여유분 측정 기준)
 
@@ -916,9 +926,11 @@ function updateConvDiag(){
   // 지금까지 여러 차례 "음소거 상태를 추측"만 하다가 헛짚은 적이 많아,
   // 이제는 실제 muted 변수 값을 그대로 화면에 노출해 더 이상 추측하지 않게 한다.
   const muteTag = ' · 음소거:'+(muted?'ON':'OFF')+(playCtx?'/재생컨텍스트:'+playCtx.state:'/재생컨텍스트:없음');
-  el.textContent = '한국어→'+(langName[fl]||fl)+' '+up+' / '+(langName[fl]||fl)+'→한국어 '+dn+gated+audioTag+muteTag;
-  el.style.color = (micBad || up!=='✓' || dn!=='✓' || muted) ? '#f0c674' : '#4a7a4a';
-  if(micBad || muted) el.style.color = '#ff453a';
+  const errRecent = lastParseError && (Date.now()-lastParseErrorAt) < 10000;
+  const errTag = errRecent ? (' · ⚠오류: '+lastParseError) : '';
+  el.textContent = '한국어→'+(langName[fl]||fl)+' '+up+' / '+(langName[fl]||fl)+'→한국어 '+dn+gated+audioTag+muteTag+errTag;
+  el.style.color = (micBad || up!=='✓' || dn!=='✓' || muted || errRecent) ? '#f0c674' : '#4a7a4a';
+  if(micBad || muted || errRecent) el.style.color = '#ff453a';
 }
 
 // ── 경과 시간 ──
@@ -1413,7 +1425,11 @@ async function parse(e){
 
     // 길이 초과 분리는 이 메시지를 모두 처리한 뒤에 — 다음 메시지부터 새 문단
     if(inTxt) noteSourceAfter(inTxt);
-  }catch(_){}
+  }catch(err){
+    lastParseError = 'ws: '+(err?.message||String(err));
+    lastParseErrorAt = Date.now();
+    updateConvDiag();
+  }
 }
 
 let resumptionHandle = null;
@@ -1593,7 +1609,11 @@ async function parseConvReverse(e){
           playAudioChunk(base64ToFloat32(p.inlineData.data, PLAYBACK_SR), 'ws2');
       }
     }
-  }catch(_){}
+  }catch(err){
+    lastParseError = 'ws2: '+(err?.message||String(err));
+    lastParseErrorAt = Date.now();
+    updateConvDiag();
+  }
 }
 
 async function startTranslation(){
@@ -1630,6 +1650,7 @@ async function startTranslation(){
   lastMicSendAt = 0;
   lastServerMsgAt = 0;
   silentNoticeShown = false;
+  lastParseError = null; lastParseErrorAt = 0;
   setupTier = 0;          // 매 시작마다 전체 구성부터 다시 시도
 
   // 문단번호 초기화 — 이어쓰기면 기존 최대값 다음부터 시작
