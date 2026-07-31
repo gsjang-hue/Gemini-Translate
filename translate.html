@@ -2,6 +2,10 @@
 <!DOCTYPE html>
 <!--
   Gemini Live Translate
+  v3.9  2026.08.01  대화 모드에 상대방 방향용 별도 API Key 입력 옵션 추가.
+                    수신 카운트 결과 턴종료 신호가 전혀 안 오고 오디오만 계속
+                    쌓이는 패턴 확인 — 동시 세션 제한/피드백 루프 여부를
+                    키 분리로 직접 실험할 수 있게 함. 진단에 키 분리 여부 표시
   v3.8  2026.08.01  클라이언트 진단이 전부 정상인데도 기능이 안 되는 상황 대응:
                     서버가 실제로 보내는 텍스트·오디오·턴종료 신호 수를 세어
                     진단 줄에 노출. 오디오 수신 자체가 0인지 직접 확인 가능
@@ -299,8 +303,13 @@
         <option value="ja">일본어</option>
       </select>
     </div>
+    <div class="sg hidden" id="sgApiKey2">
+      <label>상대방 방향 API Key (선택)</label>
+      <input type="password" id="apiKey2" placeholder="비워두면 위 키 재사용" autocomplete="off" />
+      <div style="font-size:10px;color:#555;margin-top:3px;">동시 세션 제한이 원인인지 확인하려면 다른 키를 넣어보세요</div>
+    </div>
     <a class="manual-link" href="gemini_translate_manual.pdf" target="_blank" rel="noopener" title="사용 매뉴얼 (PDF)">📖 사용법</a>
-    <div class="version-tag">v3.8 · 2026.08.01</div>
+    <div class="version-tag">v3.9 · 2026.08.01</div>
   </div>
 
   <!-- 대화 모드 안내 배너 -->
@@ -938,7 +947,10 @@ function updateConvDiag(){
   // 텍스트는 오는데 오디오(audio)가 0이면 클라이언트가 아니라 서버 쪽 문제로 봐야 한다.
   const rxTag = ' · 수신[텍스트/오디오/턴종료] ws:'+rxCount.ws.text+'/'+rxCount.ws.audio+'/'+rxCount.ws.turn
               + ' ws2:'+rxCount.ws2.text+'/'+rxCount.ws2.audio+'/'+rxCount.ws2.turn;
-  el.textContent = '한국어→'+(langName[fl]||fl)+' '+up+' / '+(langName[fl]||fl)+'→한국어 '+dn+gated+audioTag+muteTag+errTag+rxTag;
+  const key1v = document.getElementById('apiKey')?.value.trim();
+  const key2v = document.getElementById('apiKey2')?.value.trim();
+  const keyTag = ' · 키:'+(key2v && key2v!==key1v ? '분리됨' : '동일');
+  el.textContent = '한국어→'+(langName[fl]||fl)+' '+up+' / '+(langName[fl]||fl)+'→한국어 '+dn+gated+audioTag+muteTag+errTag+rxTag+keyTag;
   el.style.color = (micBad || up!=='✓' || dn!=='✓' || muted || errRecent) ? '#f0c674' : '#4a7a4a';
   if(micBad || muted || errRecent) el.style.color = '#ff453a';
 }
@@ -1092,12 +1104,14 @@ function toggleMode(){
     sgMeeting.classList.add('hidden');
     sgConv.classList.remove('hidden');
     sgSession.classList.add('hidden');
+    document.getElementById('sgApiKey2')?.classList.remove('hidden');
   } else {
     btn.textContent = '📋 회의'; btn.classList.remove('conv');
     banner.classList.add('hidden');
     sgMeeting.classList.remove('hidden');
     sgConv.classList.add('hidden');
     sgSession.classList.remove('hidden');
+    document.getElementById('sgApiKey2')?.classList.add('hidden');
   }
   updateLabels();
   updateConvDiag();
@@ -1294,6 +1308,8 @@ function saveSettings(){
 
 function loadSettings(){
   const key = localStorage.getItem('gt_apikey');
+  const key2 = localStorage.getItem('gt_apikey2');
+  if(key2){ const el2=document.getElementById('apiKey2'); if(el2) el2.value=key2; }
   if(key){ document.getElementById('apiKey').value=key; showKeySaved(true); }
   const setSel=(id,val)=>{
     const s=document.getElementById(id);
@@ -1338,6 +1354,11 @@ function clearApiKey(){
 document.getElementById('apiKey').addEventListener('change', ()=>{
   saveSettings();
   showKeySaved(!!document.getElementById('apiKey').value.trim());
+});
+document.getElementById('apiKey2')?.addEventListener('change', ()=>{
+  const v = document.getElementById('apiKey2').value.trim();
+  if(v) localStorage.setItem('gt_apikey2', v);
+  else localStorage.removeItem('gt_apikey2');
 });
 // targetLang listener moved to meetingLang/convLang
 
@@ -1562,7 +1583,8 @@ function openWS(key, targetLang, isEcho, onMsg, assignTo){
         showNotice('상대방 → 한국어 방향이 끊겼습니다 ('+ev.code+') '+(ev.reason||'')+' — 되살리는 중 ('+ws2Tries+'/'+MAX_RECONNECT+')', 'warn');
         setTimeout(()=>{
           if(!convMode || !currentKey) return;
-          ws2 = openWS(currentKey, 'ko', false, parseConvReverse, 'ws2');
+          const k2 = (document.getElementById('apiKey2')?.value.trim()) || currentKey;
+          ws2 = openWS(k2, 'ko', false, parseConvReverse, 'ws2');
         }, Math.min(1000*ws2Tries, 4000));
       } else if(convMode){
         showNotice('상대방 → 한국어 방향을 복구하지 못했습니다 ('+ev.code+') '+(ev.reason||'')+'. 중지 후 다시 시작해 주세요.', 'danger');
@@ -1738,9 +1760,13 @@ async function startTranslation(){
     // echo=false 필수: true면 이미 대상 언어인 발화도 되읽어서 음성이 2중으로 겹침
     // 두 세션을 동시에 열면 서버가 한쪽을 거부하는 경우가 있어 시차를 둔다
     ws  = openWS(key, fl,   false, parse,            'ws');   // 내 한국어 → 외국어 음성
+    const key2 = (document.getElementById('apiKey2')?.value.trim()) || key;
+    if(key2!==key){
+      showNotice('상대방 방향에 별도 API Key를 사용합니다 (동시 세션 제한 테스트).', 'info');
+    }
     setTimeout(()=>{
       if(!convMode || !currentKey || !currentSession) return;
-      ws2 = openWS(key, 'ko', false, parseConvReverse, 'ws2'); // 상대 외국어 → 한국어 음성
+      ws2 = openWS(key2, 'ko', false, parseConvReverse, 'ws2'); // 상대 외국어 → 한국어 음성
       updateConvDiag();
     }, 900);
   } else {
