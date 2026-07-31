@@ -2,6 +2,9 @@
 <!DOCTYPE html>
 <!--
   Gemini Live Translate
+  v3.1  2026.07.31  대화 모드 정지 근본 원인 수정: 오디오가 idle 간격보다 촘촘히
+                    계속 들어올 때 스피커 점유·마이크 차단이 무한 연장되던 문제를
+                    연속 시간 하드캡(점유 8초·차단 6초)으로 해결
   v3.0  2026.07.31  대화 모드 정지 문제 대응: 마이크 차단 상한(2초)·강제 해제,
                     역방향 세션(ws2) 실패를 표시하고 독립 복구, 두 세션 개설 시차,
                     대화 모드 연결 진단 표시, 서버 무응답 15초 경고
@@ -275,7 +278,7 @@
       </select>
     </div>
     <a class="manual-link" href="gemini_translate_manual.pdf" target="_blank" rel="noopener" title="사용 매뉴얼 (PDF)">📖 사용법</a>
-    <div class="version-tag">v3.0 · 2026.07.31</div>
+    <div class="version-tag">v3.1 · 2026.07.31</div>
   </div>
 
   <!-- 대화 모드 안내 배너 -->
@@ -1077,7 +1080,13 @@ const MAX_AHEAD = 1.5;   // 실시간보다 이만큼 앞서면 밀린 소리를
 // 두 목소리가 한 버퍼에 섞이거나 동시에 겹치는 것을 막는다.
 let speakerOwner = null;      // 'ws' | 'ws2'
 let speakerIdleT = null;
+let speakerOwnedSince = 0;    // 지금 방향이 스피커를 잡은 시각(연속 점유 시간 측정용)
 const OWNER_IDLE_MS = 700;    // 이 시간 동안 새 소리가 없으면 스피커를 놓는다
+// 오디오가 700ms보다 촘촘히 계속 들어오면 위 idle 타이머가 절대 발동하지 않을 수 있다.
+// 그런 경우에도 한쪽이 스피커를 영원히 붙잡지 않도록 연속 점유 시간 자체에 상한을 둔다.
+const OWNER_HARD_CAP_MS = 8000;
+let gateStartAt = 0;          // 마이크 차단이 시작된 시각(연속 차단 시간 측정용)
+const GATE_HARD_CAP_MS = 6000;
 
 // 스피커가 통역 음성을 내는 동안에는 마이크 전송을 멈춘다.
 // 그러지 않으면 스피커 소리가 마이크로 되들어가 끝없이 되번역된다.
@@ -1112,6 +1121,8 @@ function releaseSpeaker(){
   flushAudio();
   speakerOwner=null;
   speakerIdleT=null;
+  speakerOwnedSince=0;
+  gateStartAt=0;   // 스피커를 놓으면 마이크 차단도 더 이상 연장하지 않는다
 }
 
 // source: 'ws'(내 말 → 외국어) 또는 'ws2'(상대 말 → 한국어)
@@ -1119,9 +1130,15 @@ function playAudioChunk(f32, source){
   if(muted || !playCtx || playCtx.state==='closed') return;
   const src = source || 'ws';
 
+  // 오디오가 idle 타이머(700ms)보다 촘촘히 계속 들어와 한쪽이 스피커를
+  // 지나치게 오래 붙잡고 있으면, 새 조각이 도착한 이 시점에 강제로 넘긴다.
+  if(speakerOwner!=null && speakerOwner===src && speakerOwnedSince && (Date.now()-speakerOwnedSince) > OWNER_HARD_CAP_MS){
+    releaseSpeaker();
+  }
+
   // 한 방향이 말하는 중이면 다른 방향의 소리는 버린다.
   // 겹쳐 재생하거나 한 버퍼에 섞으면 두 목소리가 뒤엉켜 들린다.
-  if(speakerOwner === null) speakerOwner = src;
+  if(speakerOwner === null){ speakerOwner = src; speakerOwnedSince = Date.now(); }
   else if(speakerOwner !== src) return;
 
   if(speakerIdleT) clearTimeout(speakerIdleT);
@@ -1159,9 +1176,15 @@ function flushAudio(){
   // 이 소리가 끝날 때까지 마이크를 막아 스피커→마이크 되돌이를 끊는다.
   // 단, 오디오가 실제로 재생 중일 때만 막고, 상한을 두어 영구히 막히는 일을 방지한다.
   if(convMode && playCtx.state === 'running'){
-    const span = Math.min(Math.max(0, playHead-now)*1000 + 220, MIC_GATE_MAX_MS);
-    const until = Date.now() + span;
-    if(until > micMuteUntil) micMuteUntil = until;
+    const nowMs = Date.now();
+    if(!gateStartAt) gateStartAt = nowMs;   // 이번 연속 차단 구간의 시작
+    if(nowMs - gateStartAt < GATE_HARD_CAP_MS){
+      const span = Math.min(Math.max(0, playHead-now)*1000 + 220, MIC_GATE_MAX_MS);
+      const until = nowMs + span;
+      if(until > micMuteUntil) micMuteUntil = until;
+    }
+    // 연속 차단이 6초를 넘으면 더 이상 연장하지 않는다 —
+    // 재생이 계속되더라도 마이크는 곧 풀려 정지 상태를 벗어난다.
   }
 }
 
@@ -1170,6 +1193,7 @@ function stopPlayback(){
   if(speakerIdleT){ clearTimeout(speakerIdleT); speakerIdleT=null; }
   pendBufs=[]; pendLen=0; playHead=0;
   speakerOwner=null; micMuteUntil=0;
+  speakerOwnedSince=0; gateStartAt=0;
   if(playCtx){ try{ playCtx.close(); }catch(_){} playCtx=null; }
 }
 
