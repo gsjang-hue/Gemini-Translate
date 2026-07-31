@@ -2,6 +2,12 @@
 <!DOCTYPE html>
 <!--
   Gemini Live Translate
+  v2.8  2026.07.31  좁은 화면에서 설정 버튼이 잘리던 문제 수정
+                    (버튼 묶음만 가로 스크롤, 설정 버튼 오른쪽 고정),
+                    사용법 링크를 설정 패널로 이동
+  v2.7  2026.07.31  회의록 목록에 소요시간 표시(이어쓰기 시 누적),
+                    문단 분리를 화제 전환 신호 기반으로 개선(80자 여유분 관찰 후 결정),
+                    사용 매뉴얼 링크 추가
   v2.6  2026.07.31  대화 모드 음성 끊김 해결(반이중 스피커 제어,
                     재생 중 마이크 차단으로 피드백 루프 차단, 재생 지연 상한)
   v2.5  2026.07.31  저장 한도 실측 학습, 경고 배너에 즉시 다운로드 버튼,
@@ -54,6 +60,9 @@
 
   /* ── 번역 탭 컨트롤 바 (항상 표시) ── */
   .ctrl-bar { padding: 0.4rem 0.8rem; border-bottom: 0.5px solid #2a2a2a; display: flex; gap: 6px; align-items: center; flex-shrink: 0; background: #0f0f0f; }
+  /* 버튼 묶음만 가로 스크롤. 설정 버튼(⚙️)은 이 영역 밖에 있어 항상 오른쪽에 보인다 */
+  .ctrl-scroll { flex: 1; min-width: 0; display: flex; gap: 6px; align-items: center; overflow-x: auto; -webkit-overflow-scrolling: touch; scrollbar-width: none; }
+  .ctrl-scroll::-webkit-scrollbar { display: none; }
   .ctrl-session { flex: 1; font-size: 12px; color: #555; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
   .ctrl-toggle { background: transparent; border: 0.5px solid #333; border-radius: 7px; color: #888; font-size: 14px; padding: 4px 8px; cursor: pointer; flex-shrink: 0; }
   .ctrl-toggle.open { color: #0a84ff; border-color: #0a84ff44; background: #0a84ff11; }
@@ -65,7 +74,7 @@
   .mute-btn.on { color: #30d158; border-color: #30d15844; background: #30d15811; }
   .refine-btn { font-size:12px; padding:4px 9px; border-radius:7px; border:0.5px solid #444; background:transparent; color:#888; cursor:pointer; flex-shrink:0; white-space:nowrap; }
   .refine-btn.on { color:#f0c674; border-color:#f0c67455; background:#f0c67411; }
-  .manual-link { font-size:12px; padding:4px 9px; border-radius:7px; border:0.5px solid #444; background:transparent; color:#888; cursor:pointer; flex-shrink:0; white-space:nowrap; text-decoration:none; display:inline-flex; align-items:center; }
+  .manual-link { font-size:12px; padding:4px 9px; border-radius:7px; border:0.5px solid #444; background:transparent; color:#888; cursor:pointer; flex-shrink:0; white-space:nowrap; text-decoration:none; display:inline-flex; align-items:center; align-self:flex-end; }
   .manual-link:hover, .manual-link:active { color:#0a84ff; border-color:#0a84ff55; background:#0a84ff11; }
   .refine-tag { display:inline-block; font-size:9px; color:#f0c674; border:0.5px solid #f0c67455; border-radius:3px; padding:0 4px; margin-right:6px; vertical-align:1px; letter-spacing:0.04em; }
   .refining { opacity:0.75; }
@@ -211,15 +220,17 @@
 
   <!-- 항상 보이는 컨트롤 바 -->
   <div class="ctrl-bar">
-    <button id="startBtn" onclick="startTranslation()">시작</button>
-    <button id="stopBtn" onclick="stopTranslation()" disabled>중지</button>
-    <button id="clearBtn" onclick="clearAll()">지우기</button>
-    <!-- 모드 전환 -->
-    <button class="mode-btn" id="modeBtn" onclick="toggleMode()">📋 회의</button>
-    <button class="mute-btn" id="muteBtn" onclick="toggleMute()" title="음성 출력">🔇</button>
-    <button class="refine-btn on" id="refineBtn" onclick="toggleRefine()" title="문단이 끝나면 번역을 다시 다듬습니다">✨ 다듬기</button>
-    <span class="ctrl-session" id="ctrlSession">—</span>
-    <a class="manual-link" href="gemini_translate_manual.pdf" target="_blank" rel="noopener" title="사용 매뉴얼 (PDF)">📖 사용법</a>
+    <!-- 좁은 화면에서는 이 영역만 가로로 스크롤되고, 설정 버튼은 항상 오른쪽에 고정된다 -->
+    <div class="ctrl-scroll">
+      <button id="startBtn" onclick="startTranslation()">시작</button>
+      <button id="stopBtn" onclick="stopTranslation()" disabled>중지</button>
+      <button id="clearBtn" onclick="clearAll()">지우기</button>
+      <!-- 모드 전환 -->
+      <button class="mode-btn" id="modeBtn" onclick="toggleMode()">📋 회의</button>
+      <button class="mute-btn" id="muteBtn" onclick="toggleMute()" title="음성 출력">🔇</button>
+      <button class="refine-btn on" id="refineBtn" onclick="toggleRefine()" title="문단이 끝나면 번역을 다시 다듬습니다">✨ 다듬기</button>
+      <span class="ctrl-session" id="ctrlSession">—</span>
+    </div>
     <button class="ctrl-toggle" id="settingsToggle" onclick="toggleSettings()" title="설정">⚙️</button>
   </div>
 
@@ -256,7 +267,8 @@
         <option value="ja">일본어</option>
       </select>
     </div>
-    <div class="version-tag">v2.6 · 2026.07.31</div>
+    <a class="manual-link" href="gemini_translate_manual.pdf" target="_blank" rel="noopener" title="사용 매뉴얼 (PDF)">📖 사용법</a>
+    <div class="version-tag">v2.8 · 2026.07.31</div>
   </div>
 
   <!-- 대화 모드 안내 배너 -->
@@ -398,6 +410,7 @@ function clearAll(){
   document.getElementById('dstBox').innerHTML='';
   if(segSilenceT){clearTimeout(segSilenceT);segSilenceT=null;}
   segId=0; segLang=''; segChars=0; dstSeg=0; dstPrevEnded=true;
+  pendingCandidateLen=null; pendingSince=null;
   showErr('');
   currentSession=null;
   updateCurrentCard();
@@ -543,8 +556,35 @@ let segId = 0;
 let segSilenceT = null;
 let segLang = '';     // 현재 문단의 원문 언어
 let segChars = 0;     // 현재 문단 누적 글자 수
-const SEG_SOFT_CHARS = 600;   // 이 길이를 넘으면 '문장이 끝나는 지점'에서 나눈다
-const SEG_HARD_CHARS = 1500;  // 문장 부호가 계속 없으면 이 길이에서 강제 분리
+const SEG_SOFT_CHARS = 600;      // 이 길이를 넘으면 분리 후보를 찾기 시작한다
+const SEG_LOOKAHEAD_CHARS = 80;  // 첫 후보 이후 이만큼 더 보고 나서 분리 여부를 정한다
+const SEG_HARD_CHARS = 1500;     // 문장 부호가 계속 없으면 이 길이에서 강제 분리
+
+// 소프트 한도를 넘긴 뒤 발견한 "문장이 끝나는 지점" 후보.
+// 곧바로 자르지 않고, 다음에 들어오는 말이 화제를 이어가는지 바꾸는지 보고 나서 정한다.
+let pendingCandidateLen = null;  // 가장 최근 후보 지점의 누적 글자수
+let pendingSince = null;         // 첫 후보가 나온 시점의 누적 글자수(여유분 측정 기준)
+
+// 새 발언이 화제를 바꾸는지/이어가는지 앞부분 단어로 가늠한다.
+// 확신이 없는 대부분의 경우는 null을 반환해 안전하게 "여유분 소진" 규칙으로 넘긴다.
+const CUE_SHIFT = [
+  '그리고 나서','그다음으로','다음으로','한편,','한편 ','자 그럼','그럼 이제',
+  '참고로 말씀드리면','추가로 말씀드리면','질문 하나 더','다른 질문','다음 질문','또 다른',
+  '화제를 바꿔서','다른 얘기로',
+  'so,','now,','next,','moving on','one more thing','by the way','also,','additionally,',
+  'switching to','another question',
+];
+const CUE_CONTINUE = [
+  '그리고','그래서','하지만','그런데','근데','왜냐하면','즉','다시 말해','게다가','또한',
+  'and ','but ','so ','because ','however,','also ','moreover,','in addition,',
+];
+function classifyCue(text){
+  const t = String(text||'').trim();
+  const tl = t.toLowerCase();
+  for(const c of CUE_SHIFT){ if(t.startsWith(c) || tl.startsWith(c.toLowerCase())) return 'shift'; }
+  for(const c of CUE_CONTINUE){ if(t.startsWith(c) || tl.startsWith(c.toLowerCase())) return 'continue'; }
+  return null;
+}
 
 // 번역문은 원문보다 늦게 도착한다. 원문이 문단을 넘겨도
 // 번역이 문장을 끝낼 때까지 기다렸다가 따라 넘어가게 한다.
@@ -568,14 +608,25 @@ function endsSentence(t){
 function bumpSegment(){
   const finished = segId;      // 지금 떠나는 문단은 완결된 것
   segId++; segLang=''; segChars=0;
+  pendingCandidateLen=null; pendingSince=null;
   if(refineOn && !convMode) scheduleRefine(finished);
 }
 
-// 원문이 도착할 때 호출해 문단 전환 여부를 판단한다
+// 원문이 도착할 때 호출해 문단 전환 여부를 판단한다.
+// 우선순위: ① 발언자가 바뀐 경우(언어 전환) 즉시 분리
+//          ② 그 외엔 대기 중인 후보가 있을 때만, 지금 들어온 말이
+//             화제를 바꾸는지(즉시 분리) / 이어가는지(계속 대기) 판단
 function noteSource(text){
   const lang = detectScript(text);
-  // 언어가 실제로 바뀌면 이 텍스트부터 새 문단
-  if(lang && segLang && lang !== segLang) bumpSegment();
+  if(lang && segLang && lang !== segLang){
+    bumpSegment();   // 발언자 전환 — 최우선, 즉시 분리
+  } else if(pendingCandidateLen!=null){
+    const cue = classifyCue(text);
+    if(cue==='shift' || (segChars - pendingSince) >= SEG_LOOKAHEAD_CHARS){
+      bumpSegment();  // 화제 전환 신호가 나왔거나, 여유분(80자)을 다 봤다 — 후보 지점에서 분리
+    }
+    // cue==='continue' 이거나 아직 여유분이 남아있으면 같은 문단에 계속 이어붙인다
+  }
   if(lang && !segLang) segLang = lang;
 
   if(segSilenceT) clearTimeout(segSilenceT);
@@ -586,12 +637,17 @@ function noteSource(text){
   return { lang, seg: before };
 }
 
-// 텍스트를 붙인 뒤 문단을 넘길지 판단한다.
-// 길이를 넘겼더라도 문장이 끝나야 넘긴다 — 문장 중간에 끊으면 흐름이 깨지기 때문.
+// 텍스트를 붙인 뒤 이 문단이 분리 후보를 남겼는지, 강제 분리 한도를 넘었는지 기록한다.
+// 실제 분리는 여기서 하지 않고 noteSource가 다음 청크를 볼 때 판단한다 —
+// 그래야 "몇 글자 더 보고 나서 정한다"가 정확히 청크 경계에서 이루어진다.
 function noteSourceAfter(lastText){
-  if(segChars <= SEG_SOFT_CHARS) return;
-  if(endsSentence(lastText) || segChars > SEG_HARD_CHARS){
-    const l=segLang; bumpSegment(); segLang=l;
+  if(segChars <= SEG_SOFT_CHARS){ pendingCandidateLen=null; pendingSince=null; return; }
+  if(endsSentence(lastText)){
+    if(pendingCandidateLen===null) pendingSince = segChars;
+    pendingCandidateLen = segChars;
+  }
+  if(segChars > SEG_HARD_CHARS){
+    bumpSegment();   // 안전장치: 문장 부호 없이 계속 이어지면 강제 분리
   }
 }
 
@@ -1353,6 +1409,7 @@ async function startTranslation(){
     segId = 0;
   }
   segLang=''; segChars=0; dstSeg=segId; dstPrevEnded=true;
+  pendingCandidateLen=null; pendingSince=null;
   refinedSegs.clear(); refineQueue=[]; refineBusy=false;
   longNoticeShown=false;
   hideNotice();
