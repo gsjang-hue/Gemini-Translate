@@ -2,6 +2,11 @@
 <!DOCTYPE html>
 <!--
   Gemini Live Translate
+  v4.2  2026.08.01  음성 출력이 "테이프 늘어지듯" 왜곡되는 문제 수정: 24kHz 서버
+                    오디오를 컨텍스트의 실제 샘플레이트(기기 고유값)와 다르게
+                    선언한 채 브라우저의 자동 리샘플링에 맡기고 있었다. iOS에서
+                    이 교차 샘플레이트 재생이 부정확한 사례가 있어, 데이터를
+                    직접 리샘플링해 버퍼-컨텍스트 샘플레이트를 일치시킴
   v4.1  2026.08.01  audioStreamEnd 적용 후에도 턴종료가 계속 0으로 나와 해당
                     가설도 기각. 두 세션을 동시에 여는 구조 자체가 원인인지
                     격리하기 위해 "ws2 끄고 단독 세션만 테스트" 진단 스위치 추가
@@ -320,7 +325,7 @@
       <label for="soloWsOnly" style="font-size:11px;color:#f0c674;">진단: ws2 끄고 단독 세션만 테스트</label>
     </div>
     <a class="manual-link" href="gemini_translate_manual.pdf" target="_blank" rel="noopener" title="사용 매뉴얼 (PDF)">📖 사용법</a>
-    <div class="version-tag">v4.1 · 2026.08.01</div>
+    <div class="version-tag">v4.2 · 2026.08.01</div>
   </div>
 
   <!-- 대화 모드 안내 배너 -->
@@ -1269,6 +1274,26 @@ function playAudioChunk(f32, source){
   else if(!flushT) flushT = setTimeout(flushAudio, 60);  // 마지막 조각도 늦지 않게
 }
 
+// 서버 오디오(24kHz)를 재생 컨텍스트의 실제 샘플레이트(보통 48kHz)로 직접 변환한다.
+// 지금까지는 24kHz로 선언한 버퍼를 그대로 재생 컨텍스트에 넘기고 브라우저의
+// 자동 리샘플링에 맡겼는데, iOS Safari에서 이 교차 샘플레이트 재생이 부정확해
+// 여러 버퍼가 이어질수록 오차가 누적되며 "테이프가 늘어지는" 듯한 왜곡이
+// 생기는 것으로 보인다. 데이터를 직접 변환해 버퍼-컨텍스트 샘플레이트를 맞춘다.
+function resamplePCM(f32, fromRate, toRate){
+  if(fromRate === toRate) return f32;
+  const ratio = toRate / fromRate;
+  const outLen = Math.round(f32.length * ratio);
+  const out = new Float32Array(outLen);
+  for(let i=0;i<outLen;i++){
+    const srcPos = i / ratio;
+    const i0 = Math.floor(srcPos);
+    const i1 = Math.min(i0+1, f32.length-1);
+    const frac = srcPos - i0;
+    out[i] = f32[i0] + (f32[i1]-f32[i0])*frac;   // 선형보간
+  }
+  return out;
+}
+
 function flushAudio(){
   if(flushT){ clearTimeout(flushT); flushT=null; }
   if(!playCtx || playCtx.state==='closed' || !pendBufs.length) return;
@@ -1278,8 +1303,13 @@ function flushAudio(){
   let off=0; for(const b of pendBufs){ merged.set(b,off); off+=b.length; }
   pendBufs=[]; pendLen=0;
 
-  const buf=playCtx.createBuffer(1,total,PLAYBACK_SR);
-  buf.copyToChannel(merged,0);
+  // 서버 오디오(PLAYBACK_SR=24kHz)를 컨텍스트의 실제 샘플레이트로 직접 리샘플링한다.
+  // 버퍼를 컨텍스트와 동일한 샘플레이트로 선언해 브라우저의 교차 샘플레이트
+  // 리샘플링(iOS에서 부정확한 사례가 보고됨)을 아예 거치지 않게 한다.
+  const ctxRate = playCtx.sampleRate;
+  const resampled = resamplePCM(merged, PLAYBACK_SR, ctxRate);
+  const buf=playCtx.createBuffer(1, resampled.length, ctxRate);
+  buf.copyToChannel(resampled,0);
   const src=playCtx.createBufferSource();
   src.buffer=buf; src.connect(playCtx.destination);
 
