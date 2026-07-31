@@ -2,6 +2,10 @@
 <!DOCTYPE html>
 <!--
   Gemini Live Translate
+  v4.0  2026.08.01  근본 원인 발견(공식 문서 확인): 오디오 스트림이 끊길 때
+                    audioStreamEnd 신호를 전혀 보내지 않아 서버가 발화가 계속
+                    이어지는 것으로 보고 턴을 끝내지 못했을 가능성. 1초 이상
+                    끊기면 자동으로 종료 신호 전송. 진단에 마지막 전송 후 경과시간 표시
   v3.9  2026.08.01  대화 모드에 상대방 방향용 별도 API Key 입력 옵션 추가.
                     수신 카운트 결과 턴종료 신호가 전혀 안 오고 오디오만 계속
                     쌓이는 패턴 확인 — 동시 세션 제한/피드백 루프 여부를
@@ -309,7 +313,7 @@
       <div style="font-size:10px;color:#555;margin-top:3px;">동시 세션 제한이 원인인지 확인하려면 다른 키를 넣어보세요</div>
     </div>
     <a class="manual-link" href="gemini_translate_manual.pdf" target="_blank" rel="noopener" title="사용 매뉴얼 (PDF)">📖 사용법</a>
-    <div class="version-tag">v3.9 · 2026.08.01</div>
+    <div class="version-tag">v4.0 · 2026.08.01</div>
   </div>
 
   <!-- 대화 모드 안내 배너 -->
@@ -950,7 +954,9 @@ function updateConvDiag(){
   const key1v = document.getElementById('apiKey')?.value.trim();
   const key2v = document.getElementById('apiKey2')?.value.trim();
   const keyTag = ' · 키:'+(key2v && key2v!==key1v ? '분리됨' : '동일');
-  el.textContent = '한국어→'+(langName[fl]||fl)+' '+up+' / '+(langName[fl]||fl)+'→한국어 '+dn+gated+audioTag+muteTag+errTag+rxTag+keyTag;
+  const pauseSec = lastMicSendAt ? Math.floor((Date.now()-lastMicSendAt)/1000) : 0;
+  const streamTag = ' · 마지막전송'+pauseSec+'초전'+(audioStreamEndSent?'(종료신호전송됨)':'');
+  el.textContent = '한국어→'+(langName[fl]||fl)+' '+up+' / '+(langName[fl]||fl)+'→한국어 '+dn+gated+audioTag+muteTag+errTag+rxTag+keyTag+streamTag;
   el.style.color = (micBad || up!=='✓' || dn!=='✓' || muted || errRecent) ? '#f0c674' : '#4a7a4a';
   if(micBad || muted || errRecent) el.style.color = '#ff453a';
 }
@@ -1170,6 +1176,11 @@ const GATE_HARD_CAP_MS = 6000;
 let micMuteUntil = 0;
 const MIC_GATE_MAX_MS = 2000;   // 어떤 경우에도 이 시간을 넘겨 막지 않는다(정지 방지)
 let lastMicSendAt = 0;          // 마지막으로 마이크를 보낸 시각 — 정지 감지용
+// 공식 문서: 오디오 스트림이 1초 넘게 끊기면 audioStreamEnd를 보내 서버가
+// 캐시된 오디오를 플러시하고 턴을 마무리하게 해야 한다. 지금까지 이 신호를
+// 전혀 보내지 않아, 서버가 계속 발화가 이어지는 것으로 보고 턴을 끝내지
+// 못했을 가능성이 크다(turnComplete가 한 번도 온 적이 없었던 것과 일치).
+let audioStreamEndSent = true;  // 세션 시작 직후는 아직 보낸 적도 없고 보낼 이유도 없는 상태
 let lastServerMsgAt = 0;        // 마지막으로 서버 응답을 받은 시각
 
 // releaseSpeaker()는 문장 사이 짧은 침묵(700ms)마다도 호출되는데, 그때 연속-점유
@@ -1482,6 +1493,16 @@ function startMicProcessor(){
   const src = actx.createMediaStreamSource(stream);
   proc = actx.createScriptProcessor(2048,1,1);
   proc.onaudioprocess = ev => {
+    const nowTick = Date.now();
+    // 1초 넘게 실제 오디오를 못 보냈으면(게이트 중이든 자연스러운 침묵이든)
+    // 서버에 스트림이 끊겼음을 알린다. 같은 침묵 구간에서 반복 전송하지 않는다.
+    if(lastMicSendAt && (nowTick - lastMicSendAt) > 1000 && !audioStreamEndSent){
+      const endMsg = JSON.stringify({realtimeInput:{audioStreamEnd:true}});
+      if(ws && ws.readyState===1) ws.send(endMsg);
+      if(convMode && ws2 && ws2.readyState===1) ws2.send(endMsg);
+      audioStreamEndSent = true;
+    }
+
     if(convMode && Date.now() < micMuteUntil){
       const now = Date.now();
       if(!micBlockedSince) micBlockedSince = now;
@@ -1509,7 +1530,7 @@ function startMicProcessor(){
       ws2.send(JSON.stringify({realtimeInput:{audio:{data, mimeType:'audio/pcm;rate=16000'}}}));
       sent = true;
     }
-    if(sent){ lastMicSendAt = Date.now(); micBlockedSince = 0; }
+    if(sent){ lastMicSendAt = Date.now(); micBlockedSince = 0; audioStreamEndSent = false; }
   };
   src.connect(proc);
   proc.connect(actx.destination);
@@ -1693,6 +1714,7 @@ async function startTranslation(){
   lastParseError = null; lastParseErrorAt = 0;
   rxCount.ws.text=0; rxCount.ws.audio=0; rxCount.ws.turn=0;
   rxCount.ws2.text=0; rxCount.ws2.audio=0; rxCount.ws2.turn=0;
+  audioStreamEndSent = true;
   setupTier = 0;          // 매 시작마다 전체 구성부터 다시 시도
 
   // 문단번호 초기화 — 이어쓰기면 기존 최대값 다음부터 시작
