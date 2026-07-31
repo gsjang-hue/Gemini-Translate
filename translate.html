@@ -2,6 +2,8 @@
 <!DOCTYPE html>
 <!--
   Gemini Live Translate
+  v2.6  2026.07.31  대화 모드 음성 끊김 해결(반이중 스피커 제어,
+                    재생 중 마이크 차단으로 피드백 루프 차단, 재생 지연 상한)
   v2.5  2026.07.31  저장 한도 실측 학습, 경고 배너에 즉시 다운로드 버튼,
                     저장 기준(5MB/실측) 화면 표시
   v2.4  2026.07.31  5분 주기 자동 저장, 저장 공간 감시·경고,
@@ -251,7 +253,7 @@
         <option value="ja">일본어</option>
       </select>
     </div>
-    <div class="version-tag">v2.5 · 2026.07.31</div>
+    <div class="version-tag">v2.6 · 2026.07.31</div>
   </div>
 
   <!-- 대화 모드 안내 배너 -->
@@ -908,26 +910,61 @@ let playHead = 0;        // 다음 소리를 배치할 시각
 let pendBufs = [];       // 병합 대기 조각
 let pendLen = 0;
 let flushT = null;
-const LOOKAHEAD = 0.22;  // 220ms 여유 — 네트워크 흔들림 흡수
 const MIN_CHUNK = 0.12;  // 120ms 이상 모아서 한 번에 재생
+const MAX_AHEAD = 1.5;   // 실시간보다 이만큼 앞서면 밀린 소리를 버리고 다시 맞춘다
+
+// 대화 모드는 세션이 둘(ws: 한국어→외국어, ws2: 외국어→한국어)인데
+// 스피커는 하나다. 한 번에 한 방향만 스피커를 쓰게 해서
+// 두 목소리가 한 버퍼에 섞이거나 동시에 겹치는 것을 막는다.
+let speakerOwner = null;      // 'ws' | 'ws2'
+let speakerIdleT = null;
+const OWNER_IDLE_MS = 700;    // 이 시간 동안 새 소리가 없으면 스피커를 놓는다
+
+// 스피커가 통역 음성을 내는 동안에는 마이크 전송을 멈춘다.
+// 그러지 않으면 스피커 소리가 마이크로 되들어가 끝없이 되번역된다.
+let micMuteUntil = 0;
+
+function lookahead(){ return convMode ? 0.30 : 0.22; }
 
 // 반드시 사용자 조작(시작/음소거 해제) 시점에 호출 — iOS 자동재생 제한 통과용
 function initPlayback(){
   try{
     if(!playCtx || playCtx.state==='closed'){
-      playCtx = new (window.AudioContext||window.webkitAudioContext)({sampleRate:PLAYBACK_SR});
+      // 샘플레이트를 강제하지 않는다. iOS는 하드웨어 값을 쓰기 때문에
+      // 24kHz를 강요하면 컨텍스트 생성이 실패하거나 재생이 거칠어진다.
+      // 버퍼 자체에 24kHz를 실어 보내면 브라우저가 알아서 변환한다.
+      playCtx = new (window.AudioContext||window.webkitAudioContext)();
     }
     if(playCtx.state==='suspended') playCtx.resume();
     // 무음 1샘플을 재생해 오디오 출력을 열어둔다
-    const b=playCtx.createBuffer(1,1,PLAYBACK_SR);
+    const b=playCtx.createBuffer(1,1,playCtx.sampleRate);
     const s=playCtx.createBufferSource(); s.buffer=b;
     s.connect(playCtx.destination); s.start(0);
   }catch(_){}
   playHead=0; pendBufs=[]; pendLen=0;
+  speakerOwner=null; micMuteUntil=0;
+  if(speakerIdleT){ clearTimeout(speakerIdleT); speakerIdleT=null; }
 }
 
-function playAudioChunk(f32){
+function releaseSpeaker(){
+  flushAudio();
+  speakerOwner=null;
+  speakerIdleT=null;
+}
+
+// source: 'ws'(내 말 → 외국어) 또는 'ws2'(상대 말 → 한국어)
+function playAudioChunk(f32, source){
   if(muted || !playCtx || playCtx.state==='closed') return;
+  const src = source || 'ws';
+
+  // 한 방향이 말하는 중이면 다른 방향의 소리는 버린다.
+  // 겹쳐 재생하거나 한 버퍼에 섞으면 두 목소리가 뒤엉켜 들린다.
+  if(speakerOwner === null) speakerOwner = src;
+  else if(speakerOwner !== src) return;
+
+  if(speakerIdleT) clearTimeout(speakerIdleT);
+  speakerIdleT = setTimeout(releaseSpeaker, OWNER_IDLE_MS);
+
   pendBufs.push(f32); pendLen += f32.length;
   if(pendLen >= PLAYBACK_SR*MIN_CHUNK) flushAudio();
   else if(!flushT) flushT = setTimeout(flushAudio, 60);  // 마지막 조각도 늦지 않게
@@ -948,15 +985,27 @@ function flushAudio(){
   src.buffer=buf; src.connect(playCtx.destination);
 
   const now=playCtx.currentTime;
+  const LA=lookahead();
+  // 실시간보다 너무 앞서 예약돼 있으면(피드백이나 폭주) 밀린 소리를 버리고 다시 맞춘다
+  if(playHead - now > MAX_AHEAD) playHead = now + LA;
   // 재생 시점이 현재를 지나쳤으면 여유를 다시 확보 (끊김 대신 짧은 지연을 택함)
-  if(playHead < now + 0.02) playHead = now + LOOKAHEAD;
+  if(playHead < now + 0.02) playHead = now + LA;
+
   try{ src.start(playHead); }catch(_){ return; }
   playHead += buf.duration;
+
+  // 이 소리가 끝날 때까지 마이크를 막아 스피커→마이크 되돌이를 끊는다
+  if(convMode){
+    const until = Date.now() + Math.max(0, playHead-now)*1000 + 220;
+    if(until > micMuteUntil) micMuteUntil = until;
+  }
 }
 
 function stopPlayback(){
   if(flushT){ clearTimeout(flushT); flushT=null; }
+  if(speakerIdleT){ clearTimeout(speakerIdleT); speakerIdleT=null; }
   pendBufs=[]; pendLen=0; playHead=0;
+  speakerOwner=null; micMuteUntil=0;
   if(playCtx){ try{ playCtx.close(); }catch(_){} playCtx=null; }
 }
 
@@ -1094,7 +1143,7 @@ async function parse(e){
     if(sc.modelTurn?.parts){
       for(const p of sc.modelTurn.parts){
         if(!muted && p.inlineData?.data && p.inlineData.mimeType?.startsWith('audio/')){
-          playAudioChunk(base64ToFloat32(p.inlineData.data, PLAYBACK_SR));
+          playAudioChunk(base64ToFloat32(p.inlineData.data, PLAYBACK_SR), 'ws');
         }
         if(p.text) appendDstText(p.text,outCls,dstArr,msgSeg);
       }
@@ -1119,6 +1168,9 @@ function startMicProcessor(){
   const src = actx.createMediaStreamSource(stream);
   proc = actx.createScriptProcessor(2048,1,1);
   proc.onaudioprocess = ev => {
+    // 대화 모드에서 통역 음성이 나오는 동안에는 마이크를 보내지 않는다.
+    // 스피커 소리가 마이크로 다시 들어가면 서로를 계속 되번역해 소리가 뒤엉킨다.
+    if(convMode && Date.now() < micMuteUntil) return;
     const data = b64(f32i16(ev.inputBuffer.getChannelData(0)));
     if(ws && ws.readyState===1)
       ws.send(JSON.stringify({realtimeInput:{audio:{data, mimeType:'audio/pcm;rate=16000'}}}));
@@ -1231,7 +1283,7 @@ async function parseConvReverse(e){
     if(sc.modelTurn?.parts){
       for(const p of sc.modelTurn.parts){
         if(!muted && p.inlineData?.data && p.inlineData.mimeType?.startsWith('audio/'))
-          playAudioChunk(base64ToFloat32(p.inlineData.data, PLAYBACK_SR));
+          playAudioChunk(base64ToFloat32(p.inlineData.data, PLAYBACK_SR), 'ws2');
       }
     }
   }catch(_){}
