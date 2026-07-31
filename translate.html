@@ -2,6 +2,8 @@
 <!DOCTYPE html>
 <!--
   Gemini Live Translate
+  v2.5  2026.07.31  저장 한도 실측 학습, 경고 배너에 즉시 다운로드 버튼,
+                    저장 기준(5MB/실측) 화면 표시
   v2.4  2026.07.31  5분 주기 자동 저장, 저장 공간 감시·경고,
                     2시간 경과 안내, 화면 문단 상한(기록은 보존)
   v2.3  2026.07.28  다운로드 파일 맨 앞에 AI 요약 포함, 문서 구조 정리
@@ -122,6 +124,8 @@
   .notice-banner.danger { background:#2e1414; color:#ff8a80; border-bottom:0.5px solid #5a2020; }
   .notice-banner .notice-text { flex:1; }
   .notice-close { background:transparent; border:none; color:inherit; opacity:0.6; font-size:12px; padding:2px 4px; cursor:pointer; flex-shrink:0; }
+  .notice-action { background:rgba(255,255,255,0.12); border:0.5px solid currentColor; color:inherit; font-size:11px; padding:3px 9px; border-radius:6px; cursor:pointer; flex-shrink:0; white-space:nowrap; }
+  .notice-action.hidden { display:none; }
   .save-hint { font-size:10px; color:#4a7a4a; opacity:0.35; transition:opacity 0.3s; white-space:nowrap; }
   .storage-label { font-size:10px; color:#555; font-weight:400; letter-spacing:0; text-transform:none; }
   .trim-note { font-size:10px; color:#4a4a4a; border:0.5px dashed #333; border-radius:6px; padding:5px 8px; margin-bottom:10px; line-height:1.5; }
@@ -247,7 +251,7 @@
         <option value="ja">일본어</option>
       </select>
     </div>
-    <div class="version-tag">v2.4 · 2026.07.31</div>
+    <div class="version-tag">v2.5 · 2026.07.31</div>
   </div>
 
   <!-- 대화 모드 안내 배너 -->
@@ -258,6 +262,7 @@
   <!-- 공용 안내 배너 (저장 공간·긴 세션 경고) -->
   <div class="notice-banner hidden" id="noticeBanner">
     <span class="notice-text"></span>
+    <button class="notice-action hidden" id="noticeAction" onclick="runNoticeAction()">실행</button>
     <button class="notice-close" onclick="hideNotice()">✕</button>
   </div>
 
@@ -669,7 +674,34 @@ document.addEventListener('visibilitychange', ()=>{
 
 // ── 저장 용량 감시 ──
 // Safari의 사이트당 저장 한도는 약 5MB. 한도를 넘으면 저장이 실패하므로 미리 경고한다.
-const QUOTA_BYTES = 5*1024*1024;
+// 5MB는 가정값이다. 저장이 한 번 실패하면 그 순간의 실제 사용량을
+// 진짜 한도로 학습해 이후 퍼센트를 정확하게 만든다.
+const QUOTA_DEFAULT = 5*1024*1024;
+const QUOTA_MIN_LEARN = 512*1024;   // 이보다 작으면 용량 문제가 아니라고 판단
+let learnedQuota = 0;               // 메모리 캐시 (저장 자체가 막힌 경우 대비)
+
+function quotaBytes(){
+  if(learnedQuota >= QUOTA_MIN_LEARN) return learnedQuota;
+  let v=0;
+  try{ v=parseInt(localStorage.getItem('gt_quota')||'0',10); }catch(_){}
+  if(v >= QUOTA_MIN_LEARN){ learnedQuota=v; return v; }
+  return QUOTA_DEFAULT;
+}
+
+function isQuotaLearned(){ return quotaBytes() !== QUOTA_DEFAULT; }
+
+// 저장이 실패한 시점에 들어 있는 양은 '확실히 들어가는 크기'다.
+// 이 값을 한도로 삼으면 이후 경고 시점이 실제와 맞는다.
+function learnQuota(){
+  const used = storageUsedBytes();
+  if(used < QUOTA_MIN_LEARN) return null;   // 시크릿 모드·저장 차단 등 다른 원인
+  if(used > learnedQuota) learnedQuota = used;
+  try{
+    const prev=parseInt(localStorage.getItem('gt_quota')||'0',10);
+    if(used > prev) localStorage.setItem('gt_quota', String(used));
+  }catch(_){}                                // 작은 키조차 못 쓰면 메모리 캐시만 사용
+  return learnedQuota;
+}
 
 function storageUsedBytes(){
   let n=0;
@@ -682,13 +714,15 @@ function storageUsedBytes(){
   return n*2;   // UTF-16 기준 근사치
 }
 
-function storagePct(){ return Math.min(100, Math.round(storageUsedBytes()/QUOTA_BYTES*100)); }
+function storagePct(){ return Math.min(100, Math.round(storageUsedBytes()/quotaBytes()*100)); }
 
 function checkStorage(){
   const pct=storagePct();
   updateStorageLabel(pct);
   if(pct>=90){
-    showNotice('저장 공간이 '+pct+'% 찼습니다. 지금 회의록을 다운로드하고 오래된 기록을 삭제해 주세요.', 'danger');
+    const act = (currentSession && (currentSession.src.length||currentSession.dst.length))
+      ? { label:'지금 다운로드', fn:()=>downloadCurrent() } : null;
+    showNotice('저장 공간이 '+pct+'% 찼습니다. 회의록을 다운로드하고 오래된 기록을 삭제해 주세요.', 'danger', act);
   } else if(pct>=70){
     showNotice('저장 공간 '+pct+'% 사용 중입니다. 오래된 회의록을 정리하는 것이 좋습니다.', 'warn');
   }
@@ -699,21 +733,39 @@ function updateStorageLabel(pct){
   const el=document.getElementById('storageLabel');
   if(!el) return;
   const v = (pct==null) ? storagePct() : pct;
-  el.textContent='저장 공간 '+v+'% 사용';
+  const mb = (quotaBytes()/1024/1024);
+  const basis = isQuotaLearned()
+    ? ('실측 '+(Math.round(mb*10)/10)+'MB')
+    : (Math.round(mb)+'MB 기준');
+  el.textContent='저장 공간 '+v+'% · '+basis;
   el.style.color = v>=90 ? '#ff453a' : (v>=70 ? '#f0c674' : '#555');
 }
 
 // ── 공용 안내 배너 ──
-function showNotice(text, kind){
+let noticeActionFn=null;
+function runNoticeAction(){ if(noticeActionFn) noticeActionFn(); }
+
+// action: {label, fn} — 경고만 띄우지 않고 바로 조치할 수 있게 한다
+function showNotice(text, kind, action){
   const b=document.getElementById('noticeBanner');
   if(!b) return;
   b.className='notice-banner '+(kind||'info');
   b.querySelector('.notice-text').textContent=text;
+  const btn=document.getElementById('noticeAction');
+  if(action && btn){
+    btn.textContent=action.label;
+    btn.classList.remove('hidden');
+    noticeActionFn=action.fn;
+  } else if(btn){
+    btn.classList.add('hidden');
+    noticeActionFn=null;
+  }
   b.classList.remove('hidden');
 }
 function hideNotice(){
   const b=document.getElementById('noticeBanner');
   if(b) b.classList.add('hidden');
+  noticeActionFn=null;
 }
 
 // ── 경과 시간 ──
@@ -1399,8 +1451,13 @@ function upsertSession(session){
     setSessions(arr);
     return true;
   }catch(err){
+    const cap = learnQuota();   // 실패 지점을 실측 한도로 학습
+    updateStorageLabel();
     showErr('저장 공간 부족 — 저장 실패');
-    showNotice('저장 공간이 가득 차 저장하지 못했습니다. 지금 "다운로드"로 파일을 내려받은 뒤 오래된 회의록을 삭제해 주세요.', 'danger');
+    const capTxt = cap ? (' (실측 한도 약 '+(Math.round(cap/1024/1024*10)/10)+'MB)') : '';
+    // 데이터가 메모리에만 있는 상태다. 경고만 하지 말고 바로 내려받게 한다.
+    showNotice('저장 공간이 가득 차 저장하지 못했습니다'+capTxt+'. 기록이 사라지기 전에 파일로 내려받고 오래된 회의록을 삭제해 주세요.',
+      'danger', { label:'지금 다운로드', fn:()=>{ try{ downloadSession(session); }catch(_){} } });
     return false;
   }
 }
