@@ -2,6 +2,10 @@
 <!DOCTYPE html>
 <!--
   Gemini Live Translate
+  v3.6  2026.08.01  음성 출력 문제 재수정: 모드별 저장·복원 로직이 계속 어긋나
+                    반복 재발해, 대화 모드는 저장값과 무관하게 항상 강제로 음성을
+                    켜도록 단순화(모드 전환·세션 시작 두 지점에서 이중 확인).
+                    진단에 실제 muted 값과 재생 컨텍스트 상태를 그대로 노출
   v3.5  2026.08.01  음성 출력 안 됨 수정: 회의 모드에서 저장한 음소거 값이
                     대화 모드 진입 시에도 그대로 적용돼 음성이 항상 꺼지던 문제
                     (음소거 저장값에 모드 태그를 함께 기록해 같은 모드일 때만 복원)
@@ -289,7 +293,7 @@
       </select>
     </div>
     <a class="manual-link" href="gemini_translate_manual.pdf" target="_blank" rel="noopener" title="사용 매뉴얼 (PDF)">📖 사용법</a>
-    <div class="version-tag">v3.5 · 2026.08.01</div>
+    <div class="version-tag">v3.6 · 2026.08.01</div>
   </div>
 
   <!-- 대화 모드 안내 배너 -->
@@ -909,9 +913,12 @@ function updateConvDiag(){
   const micState = actx ? actx.state : '없음';
   const micBad = micState !== 'running';
   const audioTag = micBad ? ' · 🎙'+micState : '';
-  el.textContent = '한국어→'+(langName[fl]||fl)+' '+up+' / '+(langName[fl]||fl)+'→한국어 '+dn+gated+audioTag;
-  el.style.color = (micBad || up!=='✓' || dn!=='✓') ? '#f0c674' : '#4a7a4a';
-  if(micBad) el.style.color = '#ff453a';
+  // 지금까지 여러 차례 "음소거 상태를 추측"만 하다가 헛짚은 적이 많아,
+  // 이제는 실제 muted 변수 값을 그대로 화면에 노출해 더 이상 추측하지 않게 한다.
+  const muteTag = ' · 음소거:'+(muted?'ON':'OFF')+(playCtx?'/재생컨텍스트:'+playCtx.state:'/재생컨텍스트:없음');
+  el.textContent = '한국어→'+(langName[fl]||fl)+' '+up+' / '+(langName[fl]||fl)+'→한국어 '+dn+gated+audioTag+muteTag;
+  el.style.color = (micBad || up!=='✓' || dn!=='✓' || muted) ? '#f0c674' : '#4a7a4a';
+  if(micBad || muted) el.style.color = '#ff453a';
 }
 
 // ── 경과 시간 ──
@@ -1045,7 +1052,12 @@ function setMute(v){
 
 function toggleMode(){
   convMode = !convMode;
-  setMute(!convMode);   // 회의 모드는 음소거, 대화 모드는 음성 켬
+  // 회의 모드는 음소거 기본값(사용자가 나중에 저장된 선호로 바꿀 수 있음),
+  // 대화 모드는 항상 강제로 켠다 — 저장값과 무관하게 매번 확실히 켠다.
+  muted = convMode ? false : true;
+  const mb=document.getElementById('muteBtn');
+  if(mb){ mb.textContent = muted?'🔇':'🔊'; mb.classList.toggle('on', !muted); }
+  if(convMode) initPlayback();   // 모드 전환도 사용자 조작이므로 여기서 오디오를 열 수 있다
   const btn = document.getElementById('modeBtn');
   const banner = document.getElementById('convBanner');
   const sgMeeting = document.getElementById('sgMeetingLang');
@@ -1270,12 +1282,16 @@ function loadSettings(){
   const fs = parseInt(localStorage.getItem('gt_fontsize')||'15',10);
   if(fs>=11 && fs<=26) applyFont(fs);
   if(localStorage.getItem('gt_mode')==='1' && !convMode) toggleMode();
-  // 저장된 음소거 값은 "그 값을 저장했을 때와 같은 모드"일 때만 복원한다.
-  // 예전엔 무조건 덮어써서, 회의 모드에서 음소거로 저장해두면 대화 모드로
-  // 들어와도 다시 음소거돼 음성 출력이 전혀 안 나오는 문제가 있었다.
-  const mv = localStorage.getItem('gt_muted');
-  const mutedForMode = localStorage.getItem('gt_muted_mode');   // 저장 당시의 모드('1'=대화,'0'=회의)
-  if(mv!==null && mutedForMode===(convMode?'1':'0')) setMute(mv==='1');
+  // 대화 모드는 음성 통역이 기능의 핵심이므로, 어떤 저장값이 있든 항상 켠 채로 시작한다.
+  // 여러 차례 "음소거 저장값이 덮어써서 소리가 안 난다"는 문제가 반복돼,
+  // 아예 대화 모드에서는 저장된 음소거 설정을 참조하지 않도록 단순화했다.
+  // 회의 모드는 지금까지처럼 사용자가 저장한 선호를 그대로 복원한다.
+  if(!convMode){
+    const mv = localStorage.getItem('gt_muted');
+    if(mv!==null) setMute(mv==='1');
+  } else {
+    setMute(false);
+  }
   const rv = localStorage.getItem('gt_refine');
   if(rv==='0'){ refineOn=false; const rb=document.getElementById('refineBtn');
     if(rb){ rb.classList.remove('on'); rb.textContent='✨ 다듬기 끔'; } }
@@ -1663,6 +1679,13 @@ async function startTranslation(){
     stream = await navigator.mediaDevices.getUserMedia({audio:{sampleRate:SR,channelCount:1,echoCancellation:true,noiseSuppression:true},video:false});
   } catch(err){ showErr('마이크 권한 필요: '+err.message); return; }
 
+  // 대화 모드는 시작하는 이 순간에도 다시 한번 강제로 켠다 — 지금까지 이 지점에서
+  // 저장값·모드전환 타이밍 문제로 음소거가 남아있는 사례가 반복됐던 최종 안전장치.
+  if(convMode){
+    muted = false;
+    const mb=document.getElementById('muteBtn');
+    if(mb){ mb.textContent='🔊'; mb.classList.add('on'); }
+  }
   actx = new (window.AudioContext||window.webkitAudioContext)({sampleRate:SR});
   try{ if(actx.state==='suspended') await actx.resume(); }catch(_){}
   if(!muted) initPlayback();   // 시작 버튼 = 사용자 조작이므로 여기서 오디오를 열어야 한다
