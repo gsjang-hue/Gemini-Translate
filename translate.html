@@ -2,6 +2,11 @@
 <!DOCTYPE html>
 <!--
   Gemini Live Translate
+  v3.4  2026.08.01  서버의 turnComplete 신호를 감지해 즉시 마이크 개방
+                    (700ms 침묵 추정에만 의존하지 않는 확정적 근거 추가)
+  v3.3  2026.08.01  대화 모드 정지 재수정: 문장 사이 짧은 침묵마다 하드캡이 리셋되어
+                    사실상 무제한으로 막히던 구멍을 절대 시계(5초)로 차단.
+                    진단에 실제 차단 경과시간(초) 표시
   v3.2  2026.08.01  마이크 캡처용 오디오 컨텍스트가 조용히 정지(suspended)되는
                     문제 대응: 재생 시작 시 함께 재개, 매초 감시·자동 복구,
                     진단 표시에 컨텍스트 상태 노출(🎙suspended 등)
@@ -281,7 +286,7 @@
       </select>
     </div>
     <a class="manual-link" href="gemini_translate_manual.pdf" target="_blank" rel="noopener" title="사용 매뉴얼 (PDF)">📖 사용법</a>
-    <div class="version-tag">v3.2 · 2026.08.01</div>
+    <div class="version-tag">v3.4 · 2026.08.01</div>
   </div>
 
   <!-- 대화 모드 안내 배너 -->
@@ -895,7 +900,8 @@ function updateConvDiag(){
   const fl = document.getElementById('convLang')?.value || 'en';
   const up = (ws && ws.readyState===1) ? '✓' : '✕';
   const dn = (ws2 && ws2.readyState===1) ? '✓' : '✕';
-  const gated = (Date.now() < micMuteUntil) ? ' · 마이크 대기' : '';
+  const blockedSec = micBlockedSince ? Math.floor((Date.now()-micBlockedSince)/1000) : 0;
+  const gated = (Date.now() < micMuteUntil) ? (' · 마이크 대기'+(blockedSec>0?' '+blockedSec+'초':'')) : '';
   // 오디오 컨텍스트 상태가 running이 아니면 문제의 실제 원인일 가능성이 크므로 눈에 띄게 표시한다
   const micState = actx ? actx.state : '없음';
   const micBad = micState !== 'running';
@@ -1114,6 +1120,13 @@ const MIC_GATE_MAX_MS = 2000;   // 어떤 경우에도 이 시간을 넘겨 막�
 let lastMicSendAt = 0;          // 마지막으로 마이크를 보낸 시각 — 정지 감지용
 let lastServerMsgAt = 0;        // 마지막으로 서버 응답을 받은 시각
 
+// releaseSpeaker()는 문장 사이 짧은 침묵(700ms)마다도 호출되는데, 그때 연속-점유
+// 하드캡(gateStartAt)이 함께 리셋돼버린다. 문장 여러 개가 짧은 틈을 두고 이어지면
+// 하드캡이 매번 새로 시작해 사실상 무제한으로 막히는 구멍이 있었다.
+// 이 값은 그런 리셋과 무관하게 "마이크를 실제로 보낸 마지막 시점"만 기준으로 삼는다.
+let micBlockedSince = 0;
+const MIC_BLOCK_ABS_CAP_MS = 5000;  // 이 시간 동안 한 번도 못 보냈으면 무조건 열어준다
+
 function lookahead(){ return convMode ? 0.30 : 0.22; }
 
 // 반드시 사용자 조작(시작/음소거 해제) 시점에 호출 — iOS 자동재생 제한 통과용
@@ -1145,6 +1158,18 @@ function releaseSpeaker(){
   speakerIdleT=null;
   speakerOwnedSince=0;
   gateStartAt=0;   // 스피커를 놓으면 마이크 차단도 더 이상 연장하지 않는다
+}
+
+// 서버가 이 방향의 응답이 끝났다고 명시적으로 알려온 경우(turnComplete).
+// 지금까지는 700ms 침묵 추정에만 의존했는데, 이 신호가 훨씬 확실하다 —
+// 침묵 추정이 어떤 이유로든 어긋나도(예: 서버가 아주 낮은 볼륨의 오디오를
+// 계속 흘려보내는 경우) 여기서 바로 마이크를 되돌려준다.
+function onTurnComplete(src){
+  if(speakerOwner===src || speakerOwner===null){
+    micMuteUntil = 0;
+    micBlockedSince = 0;
+    releaseSpeaker();
+  }
 }
 
 // source: 'ws'(내 말 → 외국어) 또는 'ws2'(상대 말 → 한국어)
@@ -1334,6 +1359,9 @@ async function parse(e){
     }
 
     const sc=d.serverContent;if(!sc)return;
+
+    if(sc.turnComplete && convMode) onTurnComplete('ws');
+
     const srcArr=currentSession?currentSession.src:null;
     const dstArr=currentSession?currentSession.dst:null;
     // 대화 모드에서 ws의 출력은 외국어이므로 별도 색상(fo)으로 구분
@@ -1379,12 +1407,22 @@ function startMicProcessor(){
   const src = actx.createMediaStreamSource(stream);
   proc = actx.createScriptProcessor(2048,1,1);
   proc.onaudioprocess = ev => {
-    // 대화 모드에서 통역 음성이 나오는 동안에는 마이크를 보내지 않는다.
-    // 스피커 소리가 마이크로 다시 들어가면 서로를 계속 되번역해 소리가 뒤엉킨다.
     if(convMode && Date.now() < micMuteUntil){
-      // 안전장치: 차단이 상한을 넘겨 남아 있으면 강제로 해제한다
-      if(micMuteUntil - Date.now() > MIC_GATE_MAX_MS) micMuteUntil = 0;
-      else return;
+      const now = Date.now();
+      if(!micBlockedSince) micBlockedSince = now;
+
+      // 절대 상한: 짧은 문장이 틈을 두고 반복돼 개별 차단이 계속 새로 걸리더라도,
+      // "마지막으로 마이크를 보낸 시점"으로부터 5초가 지났으면 재생 중이든 말든 무조건 연다.
+      if(now - micBlockedSince > MIC_BLOCK_ABS_CAP_MS){
+        micMuteUntil = 0; micBlockedSince = 0;
+        releaseSpeaker();   // 반대 방향에게도 스피커 기회를 준다
+      } else if(micMuteUntil - now > MIC_GATE_MAX_MS){
+        micMuteUntil = 0;   // 개별 차단 자체가 비정상적으로 크면 즉시 해제
+      } else {
+        return;
+      }
+    } else {
+      micBlockedSince = 0;   // 막혀있지 않은 정상 상태 — 시계 리셋
     }
     const data = b64(f32i16(ev.inputBuffer.getChannelData(0)));
     let sent = false;
@@ -1396,7 +1434,7 @@ function startMicProcessor(){
       ws2.send(JSON.stringify({realtimeInput:{audio:{data, mimeType:'audio/pcm;rate=16000'}}}));
       sent = true;
     }
-    if(sent) lastMicSendAt = Date.now();
+    if(sent){ lastMicSendAt = Date.now(); micBlockedSince = 0; }
   };
   src.connect(proc);
   proc.connect(actx.destination);
@@ -1521,6 +1559,9 @@ async function parseConvReverse(e){
   let txt=typeof e.data==='string'?e.data:(e.data instanceof Blob?await e.data.text():new TextDecoder().decode(e.data));
   try{
     const d=JSON.parse(txt); const sc=d.serverContent; if(!sc)return;
+
+    if(sc.turnComplete) onTurnComplete('ws2');
+
     if(sc.outputTranscription?.text) appendDstText(sc.outputTranscription.text,'ko',currentSession?.dst||null);
     if(sc.modelTurn?.parts){
       for(const p of sc.modelTurn.parts){
@@ -1561,6 +1602,7 @@ async function startTranslation(){
   reconnectTries = 0;
   ws2Tries = 0;
   micMuteUntil = 0;
+  micBlockedSince = 0;
   lastMicSendAt = 0;
   lastServerMsgAt = 0;
   silentNoticeShown = false;
@@ -1644,6 +1686,7 @@ function cleanup(){
   if(segSilenceT){clearTimeout(segSilenceT);segSilenceT=null;}
   if(currentSession) currentSession.durationSec = getCurrentDurationSec(currentSession);
   micMuteUntil = 0;
+  micBlockedSince = 0;
   stopElapsed();
   stopAutoSave();
   const cd=document.getElementById('convDiag'); if(cd) cd.textContent='';
