@@ -2,6 +2,9 @@
 <!DOCTYPE html>
 <!--
   Gemini Live Translate
+  v4.1  2026.08.01  audioStreamEnd 적용 후에도 턴종료가 계속 0으로 나와 해당
+                    가설도 기각. 두 세션을 동시에 여는 구조 자체가 원인인지
+                    격리하기 위해 "ws2 끄고 단독 세션만 테스트" 진단 스위치 추가
   v4.0  2026.08.01  근본 원인 발견(공식 문서 확인): 오디오 스트림이 끊길 때
                     audioStreamEnd 신호를 전혀 보내지 않아 서버가 발화가 계속
                     이어지는 것으로 보고 턴을 끝내지 못했을 가능성. 1초 이상
@@ -312,8 +315,12 @@
       <input type="password" id="apiKey2" placeholder="비워두면 위 키 재사용" autocomplete="off" />
       <div style="font-size:10px;color:#555;margin-top:3px;">동시 세션 제한이 원인인지 확인하려면 다른 키를 넣어보세요</div>
     </div>
+    <div class="sg hidden" id="sgSoloTest" style="flex-direction:row;align-items:center;gap:6px;">
+      <input type="checkbox" id="soloWsOnly" style="width:auto;" />
+      <label for="soloWsOnly" style="font-size:11px;color:#f0c674;">진단: ws2 끄고 단독 세션만 테스트</label>
+    </div>
     <a class="manual-link" href="gemini_translate_manual.pdf" target="_blank" rel="noopener" title="사용 매뉴얼 (PDF)">📖 사용법</a>
-    <div class="version-tag">v4.0 · 2026.08.01</div>
+    <div class="version-tag">v4.1 · 2026.08.01</div>
   </div>
 
   <!-- 대화 모드 안내 배너 -->
@@ -935,7 +942,8 @@ function updateConvDiag(){
   if(!convMode){ el.textContent=''; return; }
   const fl = document.getElementById('convLang')?.value || 'en';
   const up = (ws && ws.readyState===1) ? '✓' : '✕';
-  const dn = (ws2 && ws2.readyState===1) ? '✓' : '✕';
+  const soloMode = document.getElementById('soloWsOnly')?.checked;
+  const dn = soloMode ? '(끔·진단)' : ((ws2 && ws2.readyState===1) ? '✓' : '✕');
   const blockedSec = micBlockedSince ? Math.floor((Date.now()-micBlockedSince)/1000) : 0;
   const gated = (Date.now() < micMuteUntil) ? (' · 마이크 대기'+(blockedSec>0?' '+blockedSec+'초':'')) : '';
   // 오디오 컨텍스트 상태가 running이 아니면 문제의 실제 원인일 가능성이 크므로 눈에 띄게 표시한다
@@ -1111,6 +1119,7 @@ function toggleMode(){
     sgConv.classList.remove('hidden');
     sgSession.classList.add('hidden');
     document.getElementById('sgApiKey2')?.classList.remove('hidden');
+    document.getElementById('sgSoloTest')?.classList.remove('hidden');
   } else {
     btn.textContent = '📋 회의'; btn.classList.remove('conv');
     banner.classList.add('hidden');
@@ -1118,6 +1127,7 @@ function toggleMode(){
     sgConv.classList.add('hidden');
     sgSession.classList.remove('hidden');
     document.getElementById('sgApiKey2')?.classList.add('hidden');
+    document.getElementById('sgSoloTest')?.classList.add('hidden');
   }
   updateLabels();
   updateConvDiag();
@@ -1782,15 +1792,20 @@ async function startTranslation(){
     // echo=false 필수: true면 이미 대상 언어인 발화도 되읽어서 음성이 2중으로 겹침
     // 두 세션을 동시에 열면 서버가 한쪽을 거부하는 경우가 있어 시차를 둔다
     ws  = openWS(key, fl,   false, parse,            'ws');   // 내 한국어 → 외국어 음성
-    const key2 = (document.getElementById('apiKey2')?.value.trim()) || key;
-    if(key2!==key){
-      showNotice('상대방 방향에 별도 API Key를 사용합니다 (동시 세션 제한 테스트).', 'info');
+    const soloOnly = document.getElementById('soloWsOnly')?.checked;
+    if(soloOnly){
+      showNotice('진단 모드: ws2를 열지 않고 ws(한국어→영어) 세션 하나만 테스트합니다.', 'info');
+    } else {
+      const key2 = (document.getElementById('apiKey2')?.value.trim()) || key;
+      if(key2!==key){
+        showNotice('상대방 방향에 별도 API Key를 사용합니다 (동시 세션 제한 테스트).', 'info');
+      }
+      setTimeout(()=>{
+        if(!convMode || !currentKey || !currentSession || document.getElementById('soloWsOnly')?.checked) return;
+        ws2 = openWS(key2, 'ko', false, parseConvReverse, 'ws2'); // 상대 외국어 → 한국어 음성
+        updateConvDiag();
+      }, 900);
     }
-    setTimeout(()=>{
-      if(!convMode || !currentKey || !currentSession) return;
-      ws2 = openWS(key2, 'ko', false, parseConvReverse, 'ws2'); // 상대 외국어 → 한국어 음성
-      updateConvDiag();
-    }, 900);
   } else {
     ws = openWS(key, targetLang, false, parse, 'ws');
   }
