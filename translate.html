@@ -2,6 +2,9 @@
 <!DOCTYPE html>
 <!--
   Gemini Live Translate
+  v3.0  2026.07.31  대화 모드 정지 문제 대응: 마이크 차단 상한(2초)·강제 해제,
+                    역방향 세션(ws2) 실패를 표시하고 독립 복구, 두 세션 개설 시차,
+                    대화 모드 연결 진단 표시, 서버 무응답 15초 경고
   v2.9  2026.07.31  발화 중간 멈춤에서 원문 문단이 문장 중간에 쪼개지던 문제 수정
                     (침묵 분리를 문장 완결까지 지연),
                     중지 시 아직 다듬지 않은 문단을 모두 보정
@@ -143,6 +146,7 @@
   .notice-action { background:rgba(255,255,255,0.12); border:0.5px solid currentColor; color:inherit; font-size:11px; padding:3px 9px; border-radius:6px; cursor:pointer; flex-shrink:0; white-space:nowrap; }
   .notice-action.hidden { display:none; }
   .save-hint { font-size:10px; color:#4a7a4a; opacity:0.35; transition:opacity 0.3s; white-space:nowrap; }
+  .conv-diag { font-size:10px; color:#4a7a4a; white-space:nowrap; }
   .storage-label { font-size:10px; color:#555; font-weight:400; letter-spacing:0; text-transform:none; }
   .trim-note { font-size:10px; color:#4a4a4a; border:0.5px dashed #333; border-radius:6px; padding:5px 8px; margin-bottom:10px; line-height:1.5; }
   .version-tag { font-size: 10px; color: #3d3d3d; align-self: flex-end; margin-left: auto; padding-bottom: 2px; letter-spacing: 0.03em; }
@@ -271,7 +275,7 @@
       </select>
     </div>
     <a class="manual-link" href="gemini_translate_manual.pdf" target="_blank" rel="noopener" title="사용 매뉴얼 (PDF)">📖 사용법</a>
-    <div class="version-tag">v2.9 · 2026.07.31</div>
+    <div class="version-tag">v3.0 · 2026.07.31</div>
   </div>
 
   <!-- 대화 모드 안내 배너 -->
@@ -291,6 +295,7 @@
     <span id="statusText">대기 중</span>
     <span id="elapsed" class="elapsed"></span>
     <span id="saveHint" class="save-hint"></span>
+    <span id="convDiag" class="conv-diag"></span>
     <span class="err" id="err"></span>
     <span class="font-ctrl">
       <button onclick="adjustFont(-1)" title="글자 작게">A−</button>
@@ -874,9 +879,25 @@ function hideNotice(){
   noticeActionFn=null;
 }
 
+// ── 대화 모드 진단 ──
+// 두 방향 중 어디가 살아있고 데이터가 흐르는지 보여준다.
+// 문제가 생겼을 때 원인을 눈으로 확인할 수 있어야 한다.
+function updateConvDiag(){
+  const el = document.getElementById('convDiag');
+  if(!el) return;
+  if(!convMode){ el.textContent=''; return; }
+  const fl = document.getElementById('convLang')?.value || 'en';
+  const up = (ws && ws.readyState===1) ? '✓' : '✕';
+  const dn = (ws2 && ws2.readyState===1) ? '✓' : '✕';
+  const gated = (Date.now() < micMuteUntil) ? ' · 마이크 대기' : '';
+  el.textContent = '한국어→'+(langName[fl]||fl)+' '+up+' / '+(langName[fl]||fl)+'→한국어 '+dn+gated;
+  el.style.color = (up==='✓' && dn==='✓') ? '#4a7a4a' : '#f0c674';
+}
+
 // ── 경과 시간 ──
 let elapsedInt=null, startedAt=0;
 let longNoticeShown=false;
+let silentNoticeShown=false;
 
 // ── 주기적 자동 저장 ──
 // 중지 시점에만 저장하면 긴 회의 중 페이지가 죽었을 때 전부 잃는다.
@@ -914,6 +935,19 @@ function startElapsed(){
     const mm=String(Math.floor(s/60)%60).padStart(2,'0'), ss=String(s%60).padStart(2,'0');
     const el=document.getElementById('elapsed');
     if(el) el.textContent=(s>=3600? Math.floor(s/3600)+':' : '')+mm+':'+ss;
+    updateConvDiag();
+
+    // 소켓은 열려 있는데 서버 응답이 오래 끊긴 경우를 알려준다.
+    // 예전에는 이 상황에서 아무 표시 없이 경과시간만 흘렀다.
+    if(lastServerMsgAt && (Date.now()-lastServerMsgAt) > 15000 && !silentNoticeShown){
+      silentNoticeShown = true;
+      showNotice('15초 이상 서버 응답이 없습니다. 소리가 마이크에 닿는지 확인하고, 계속되면 중지 후 다시 시작해 주세요.', 'warn');
+    }
+    if(lastServerMsgAt && (Date.now()-lastServerMsgAt) < 5000 && silentNoticeShown){
+      silentNoticeShown = false;   // 응답이 돌아오면 안내를 내린다
+      hideNotice();
+    }
+
     // 2시간을 넘기면 세션을 나누도록 한 번 안내한다
     if(s>=7200 && !longNoticeShown){
       longNoticeShown=true;
@@ -1000,6 +1034,7 @@ function toggleMode(){
     sgSession.classList.remove('hidden');
   }
   updateLabels();
+  updateConvDiag();
   localStorage.setItem('gt_mode', convMode ? '1' : '0');
   // 실행 중이면 재시작 안내
   if(ws && ws.readyState===1){
@@ -1047,6 +1082,9 @@ const OWNER_IDLE_MS = 700;    // 이 시간 동안 새 소리가 없으면 스�
 // 스피커가 통역 음성을 내는 동안에는 마이크 전송을 멈춘다.
 // 그러지 않으면 스피커 소리가 마이크로 되들어가 끝없이 되번역된다.
 let micMuteUntil = 0;
+const MIC_GATE_MAX_MS = 2000;   // 어떤 경우에도 이 시간을 넘겨 막지 않는다(정지 방지)
+let lastMicSendAt = 0;          // 마지막으로 마이크를 보낸 시각 — 정지 감지용
+let lastServerMsgAt = 0;        // 마지막으로 서버 응답을 받은 시각
 
 function lookahead(){ return convMode ? 0.30 : 0.22; }
 
@@ -1118,9 +1156,11 @@ function flushAudio(){
   try{ src.start(playHead); }catch(_){ return; }
   playHead += buf.duration;
 
-  // 이 소리가 끝날 때까지 마이크를 막아 스피커→마이크 되돌이를 끊는다
-  if(convMode){
-    const until = Date.now() + Math.max(0, playHead-now)*1000 + 220;
+  // 이 소리가 끝날 때까지 마이크를 막아 스피커→마이크 되돌이를 끊는다.
+  // 단, 오디오가 실제로 재생 중일 때만 막고, 상한을 두어 영구히 막히는 일을 방지한다.
+  if(convMode && playCtx.state === 'running'){
+    const span = Math.min(Math.max(0, playHead-now)*1000 + 220, MIC_GATE_MAX_MS);
+    const until = Date.now() + span;
     if(until > micMuteUntil) micMuteUntil = until;
   }
 }
@@ -1281,6 +1321,7 @@ async function parse(e){
 let resumptionHandle = null;
 let isReconnecting = false;
 let reconnectTries = 0;
+let ws2Tries = 0;            // 대화 모드 역방향 세션의 복구 시도 횟수
 const MAX_RECONNECT = 5;
 let currentKey = '';
 let currentTargetLang = '';
@@ -1294,12 +1335,22 @@ function startMicProcessor(){
   proc.onaudioprocess = ev => {
     // 대화 모드에서 통역 음성이 나오는 동안에는 마이크를 보내지 않는다.
     // 스피커 소리가 마이크로 다시 들어가면 서로를 계속 되번역해 소리가 뒤엉킨다.
-    if(convMode && Date.now() < micMuteUntil) return;
+    if(convMode && Date.now() < micMuteUntil){
+      // 안전장치: 차단이 상한을 넘겨 남아 있으면 강제로 해제한다
+      if(micMuteUntil - Date.now() > MIC_GATE_MAX_MS) micMuteUntil = 0;
+      else return;
+    }
     const data = b64(f32i16(ev.inputBuffer.getChannelData(0)));
-    if(ws && ws.readyState===1)
+    let sent = false;
+    if(ws && ws.readyState===1){
       ws.send(JSON.stringify({realtimeInput:{audio:{data, mimeType:'audio/pcm;rate=16000'}}}));
-    if(convMode && ws2 && ws2.readyState===1)
+      sent = true;
+    }
+    if(convMode && ws2 && ws2.readyState===1){
       ws2.send(JSON.stringify({realtimeInput:{audio:{data, mimeType:'audio/pcm;rate=16000'}}}));
+      sent = true;
+    }
+    if(sent) lastMicSendAt = Date.now();
   };
   src.connect(proc);
   proc.connect(actx.destination);
@@ -1346,11 +1397,15 @@ function openWS(key, targetLang, isEcho, onMsg, assignTo){
     }
   };
   socket.onmessage = ev => {
+    lastServerMsgAt = Date.now();
     if(!socket._gotData){
       socket._gotData = true;            // setup 통과 확인
       if(assignTo === 'ws'){
         reconnectTries = 0;              // 정상 수신되면 재시도 카운터 초기화
         showErr('');
+      } else if(assignTo === 'ws2'){
+        ws2Tries = 0;                    // 역방향도 정상 수신되면 카운터 초기화
+        updateConvDiag();
       }
     }
     onMsg(ev);
@@ -1358,7 +1413,24 @@ function openWS(key, targetLang, isEcho, onMsg, assignTo){
   socket.onerror = () => { if(!isReconnecting && assignTo==='ws'){ showErr('연결 오류.'); cleanup(); } };
   socket.onclose = ev => {
     if(ev.code === 1000) return;
-    if(assignTo !== 'ws') return;   // ws2는 ws 재연결에 딸려서 복구됨
+
+    // ws2(상대 → 한국어)가 끊긴 경우: 이전에는 조용히 무시해 원인을 알 수 없었다.
+    // 이제 사유를 알리고, 대화가 진행 중이면 독립적으로 한 번 되살린다.
+    if(assignTo === 'ws2'){
+      ws2 = null;
+      updateConvDiag();
+      if(convMode && currentKey && currentSession && ws2Tries < MAX_RECONNECT){
+        ws2Tries++;
+        showNotice('상대방 → 한국어 방향이 끊겼습니다 ('+ev.code+') '+(ev.reason||'')+' — 되살리는 중 ('+ws2Tries+'/'+MAX_RECONNECT+')', 'warn');
+        setTimeout(()=>{
+          if(!convMode || !currentKey) return;
+          ws2 = openWS(currentKey, 'ko', false, parseConvReverse, 'ws2');
+        }, Math.min(1000*ws2Tries, 4000));
+      } else if(convMode){
+        showNotice('상대방 → 한국어 방향을 복구하지 못했습니다 ('+ev.code+') '+(ev.reason||'')+'. 중지 후 다시 시작해 주세요.', 'danger');
+      }
+      return;
+    }
 
     const alive = Date.now() - (socket._openedAt || Date.now());
     const configRejected = !socket._gotData && alive < 8000;
@@ -1441,6 +1513,11 @@ async function startTranslation(){
   currentSessionName = keepSession ? currentSession.name : sessionName;
   resumptionHandle = null;
   reconnectTries = 0;
+  ws2Tries = 0;
+  micMuteUntil = 0;
+  lastMicSendAt = 0;
+  lastServerMsgAt = 0;
+  silentNoticeShown = false;
   setupTier = 0;          // 매 시작마다 전체 구성부터 다시 시도
 
   // 문단번호 초기화 — 이어쓰기면 기존 최대값 다음부터 시작
@@ -1498,8 +1575,13 @@ async function startTranslation(){
   if(convMode){
     const fl = document.getElementById('convLang').value;
     // echo=false 필수: true면 이미 대상 언어인 발화도 되읽어서 음성이 2중으로 겹침
+    // 두 세션을 동시에 열면 서버가 한쪽을 거부하는 경우가 있어 시차를 둔다
     ws  = openWS(key, fl,   false, parse,            'ws');   // 내 한국어 → 외국어 음성
-    ws2 = openWS(key, 'ko', false, parseConvReverse, 'ws2');  // 상대 외국어 → 한국어 음성
+    setTimeout(()=>{
+      if(!convMode || !currentKey || !currentSession) return;
+      ws2 = openWS(key, 'ko', false, parseConvReverse, 'ws2'); // 상대 외국어 → 한국어 음성
+      updateConvDiag();
+    }, 900);
   } else {
     ws = openWS(key, targetLang, false, parse, 'ws');
   }
@@ -1514,8 +1596,10 @@ function cleanup(){
   if(ws2){try{ws2.close(1000);}catch(_){}ws2=null;}
   if(segSilenceT){clearTimeout(segSilenceT);segSilenceT=null;}
   if(currentSession) currentSession.durationSec = getCurrentDurationSec(currentSession);
+  micMuteUntil = 0;
   stopElapsed();
   stopAutoSave();
+  const cd=document.getElementById('convDiag'); if(cd) cd.textContent='';
   releaseWakeLock();
 
   // 내용이 있으면 자동 저장 — 저장 버튼을 잊어도 회의록이 남도록
