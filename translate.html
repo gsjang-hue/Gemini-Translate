@@ -2,6 +2,9 @@
 <!DOCTYPE html>
 <!--
   Gemini Live Translate
+  v3.2  2026.08.01  마이크 캡처용 오디오 컨텍스트가 조용히 정지(suspended)되는
+                    문제 대응: 재생 시작 시 함께 재개, 매초 감시·자동 복구,
+                    진단 표시에 컨텍스트 상태 노출(🎙suspended 등)
   v3.1  2026.07.31  대화 모드 정지 근본 원인 수정: 오디오가 idle 간격보다 촘촘히
                     계속 들어올 때 스피커 점유·마이크 차단이 무한 연장되던 문제를
                     연속 시간 하드캡(점유 8초·차단 6초)으로 해결
@@ -278,7 +281,7 @@
       </select>
     </div>
     <a class="manual-link" href="gemini_translate_manual.pdf" target="_blank" rel="noopener" title="사용 매뉴얼 (PDF)">📖 사용법</a>
-    <div class="version-tag">v3.1 · 2026.07.31</div>
+    <div class="version-tag">v3.2 · 2026.08.01</div>
   </div>
 
   <!-- 대화 모드 안내 배너 -->
@@ -893,8 +896,13 @@ function updateConvDiag(){
   const up = (ws && ws.readyState===1) ? '✓' : '✕';
   const dn = (ws2 && ws2.readyState===1) ? '✓' : '✕';
   const gated = (Date.now() < micMuteUntil) ? ' · 마이크 대기' : '';
-  el.textContent = '한국어→'+(langName[fl]||fl)+' '+up+' / '+(langName[fl]||fl)+'→한국어 '+dn+gated;
-  el.style.color = (up==='✓' && dn==='✓') ? '#4a7a4a' : '#f0c674';
+  // 오디오 컨텍스트 상태가 running이 아니면 문제의 실제 원인일 가능성이 크므로 눈에 띄게 표시한다
+  const micState = actx ? actx.state : '없음';
+  const micBad = micState !== 'running';
+  const audioTag = micBad ? ' · 🎙'+micState : '';
+  el.textContent = '한국어→'+(langName[fl]||fl)+' '+up+' / '+(langName[fl]||fl)+'→한국어 '+dn+gated+audioTag;
+  el.style.color = (micBad || up!=='✓' || dn!=='✓') ? '#f0c674' : '#4a7a4a';
+  if(micBad) el.style.color = '#ff453a';
 }
 
 // ── 경과 시간 ──
@@ -938,6 +946,17 @@ function startElapsed(){
     const mm=String(Math.floor(s/60)%60).padStart(2,'0'), ss=String(s%60).padStart(2,'0');
     const el=document.getElementById('elapsed');
     if(el) el.textContent=(s>=3600? Math.floor(s/3600)+':' : '')+mm+':'+ss;
+    // 마이크/재생 컨텍스트가 정지 상태로 빠졌는지 매초 확인해 즉시 되살린다.
+    // iOS는 두 컨텍스트가 동시에 있을 때 한쪽을 조용히 정지시키는 경우가 있는데,
+    // 이 감시가 없으면 화면엔 아무 표시 없이 마이크만 영구히 죽는다.
+    if(actx && actx.state==='suspended'){
+      try{ actx.resume(); }catch(_){}
+      showNotice('마이크가 일시 정지되어 자동으로 재개했습니다. 계속 안 되면 중지 후 다시 시작해 주세요.', 'warn');
+    }
+    if(playCtx && playCtx.state==='suspended' && !muted){
+      try{ playCtx.resume(); }catch(_){}
+    }
+
     updateConvDiag();
 
     // 소켓은 열려 있는데 서버 응답이 오래 끊긴 경우를 알려준다.
@@ -1099,6 +1118,9 @@ function lookahead(){ return convMode ? 0.30 : 0.22; }
 
 // 반드시 사용자 조작(시작/음소거 해제) 시점에 호출 — iOS 자동재생 제한 통과용
 function initPlayback(){
+  // 재생 컨텍스트를 여는 순간이 iOS가 마이크 컨텍스트를 정지시키는 가장 흔한 시점이다.
+  // 여기서 마이크 쪽도 같이 깨워 충돌을 최소화한다.
+  try{ if(actx && actx.state!=='running' && actx.state!=='closed') actx.resume(); }catch(_){}
   try{
     if(!playCtx || playCtx.state==='closed'){
       // 샘플레이트를 강제하지 않는다. iOS는 하드웨어 값을 쓰기 때문에
@@ -1592,6 +1614,7 @@ async function startTranslation(){
   } catch(err){ showErr('마이크 권한 필요: '+err.message); return; }
 
   actx = new (window.AudioContext||window.webkitAudioContext)({sampleRate:SR});
+  try{ if(actx.state==='suspended') await actx.resume(); }catch(_){}
   if(!muted) initPlayback();   // 시작 버튼 = 사용자 조작이므로 여기서 오디오를 열어야 한다
   setStatus('','연결 중...');
   document.getElementById('startBtn').disabled = true;
