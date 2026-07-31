@@ -2,6 +2,9 @@
 <!DOCTYPE html>
 <!--
   Gemini Live Translate
+  v3.5  2026.08.01  음성 출력 안 됨 수정: 회의 모드에서 저장한 음소거 값이
+                    대화 모드 진입 시에도 그대로 적용돼 음성이 항상 꺼지던 문제
+                    (음소거 저장값에 모드 태그를 함께 기록해 같은 모드일 때만 복원)
   v3.4  2026.08.01  서버의 turnComplete 신호를 감지해 즉시 마이크 개방
                     (700ms 침묵 추정에만 의존하지 않는 확정적 근거 추가)
   v3.3  2026.08.01  대화 모드 정지 재수정: 문장 사이 짧은 침묵마다 하드캡이 리셋되어
@@ -286,7 +289,7 @@
       </select>
     </div>
     <a class="manual-link" href="gemini_translate_manual.pdf" target="_blank" rel="noopener" title="사용 매뉴얼 (PDF)">📖 사용법</a>
-    <div class="version-tag">v3.4 · 2026.08.01</div>
+    <div class="version-tag">v3.5 · 2026.08.01</div>
   </div>
 
   <!-- 대화 모드 안내 배너 -->
@@ -1030,6 +1033,7 @@ function toggleMute(){
     initPlayback();   // 버튼 클릭 = 사용자 조작이므로 이 시점에 오디오를 열 수 있다
   }
   localStorage.setItem('gt_muted', muted?'1':'0');
+  localStorage.setItem('gt_muted_mode', convMode?'1':'0');   // 어느 모드에서 저장했는지 함께 기록
 }
 
 function setMute(v){
@@ -1266,8 +1270,12 @@ function loadSettings(){
   const fs = parseInt(localStorage.getItem('gt_fontsize')||'15',10);
   if(fs>=11 && fs<=26) applyFont(fs);
   if(localStorage.getItem('gt_mode')==='1' && !convMode) toggleMode();
+  // 저장된 음소거 값은 "그 값을 저장했을 때와 같은 모드"일 때만 복원한다.
+  // 예전엔 무조건 덮어써서, 회의 모드에서 음소거로 저장해두면 대화 모드로
+  // 들어와도 다시 음소거돼 음성 출력이 전혀 안 나오는 문제가 있었다.
   const mv = localStorage.getItem('gt_muted');
-  if(mv!==null) setMute(mv==='1');   // 저장된 음소거 상태 복원 (모드 기본값보다 우선)
+  const mutedForMode = localStorage.getItem('gt_muted_mode');   // 저장 당시의 모드('1'=대화,'0'=회의)
+  if(mv!==null && mutedForMode===(convMode?'1':'0')) setMute(mv==='1');
   const rv = localStorage.getItem('gt_refine');
   if(rv==='0'){ refineOn=false; const rb=document.getElementById('refineBtn');
     if(rb){ rb.classList.remove('on'); rb.textContent='✨ 다듬기 끔'; } }
