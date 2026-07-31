@@ -2,6 +2,9 @@
 <!DOCTYPE html>
 <!--
   Gemini Live Translate
+  v2.9  2026.07.31  발화 중간 멈춤에서 원문 문단이 문장 중간에 쪼개지던 문제 수정
+                    (침묵 분리를 문장 완결까지 지연),
+                    중지 시 아직 다듬지 않은 문단을 모두 보정
   v2.8  2026.07.31  좁은 화면에서 설정 버튼이 잘리던 문제 수정
                     (버튼 묶음만 가로 스크롤, 설정 버튼 오른쪽 고정),
                     사용법 링크를 설정 패널로 이동
@@ -268,7 +271,7 @@
       </select>
     </div>
     <a class="manual-link" href="gemini_translate_manual.pdf" target="_blank" rel="noopener" title="사용 매뉴얼 (PDF)">📖 사용법</a>
-    <div class="version-tag">v2.8 · 2026.07.31</div>
+    <div class="version-tag">v2.9 · 2026.07.31</div>
   </div>
 
   <!-- 대화 모드 안내 배너 -->
@@ -411,6 +414,7 @@ function clearAll(){
   if(segSilenceT){clearTimeout(segSilenceT);segSilenceT=null;}
   segId=0; segLang=''; segChars=0; dstSeg=0; dstPrevEnded=true;
   pendingCandidateLen=null; pendingSince=null;
+  pendingSilenceBreak=false; lastSrcEndedSentence=true;
   showErr('');
   currentSession=null;
   updateCurrentCard();
@@ -465,6 +469,24 @@ function scheduleRefine(seg){
   refinedSegs.add(seg);
   refineQueue.push(seg);
   setTimeout(runRefineQueue, 1500);   // 늦게 도착하는 조각을 기다린다
+}
+
+// 아직 다듬지 않은 문단을 모두 찾아 큐에 넣는다.
+// 중지 시점에 큐가 덜 비었거나 API 호출이 실패했던 문단도 여기서 다시 챙긴다.
+function refinePendingAll(){
+  if(!refineOn || convMode || !currentSession) return 0;
+  const keys = new Set();
+  (currentSession.src||[]).forEach(x=>{ if(x.seg!=null) keys.add(String(x.seg)); });
+  let queued = 0;
+  [...keys].sort((a,b)=>Number(a)-Number(b)).forEach(k=>{
+    const dst = (currentSession.dst||[]).filter(d=>String(d.seg)===k);
+    if(!dst.length) return;                       // 번역이 없는 문단은 대상이 아니다
+    if(dst.every(d=>d.refined)) return;           // 이미 다듬어진 문단은 건너뛴다
+    refinedSegs.delete(Number(k));                // 실패했던 문단도 다시 시도할 수 있게
+    scheduleRefine(Number(k));
+    queued++;
+  });
+  return queued;
 }
 
 async function runRefineQueue(){
@@ -565,6 +587,11 @@ const SEG_HARD_CHARS = 1500;     // 문장 부호가 계속 없으면 이 길이
 let pendingCandidateLen = null;  // 가장 최근 후보 지점의 누적 글자수
 let pendingSince = null;         // 첫 후보가 나온 시점의 누적 글자수(여유분 측정 기준)
 
+// 침묵으로 문단을 끊으려 했지만 문장이 아직 안 끝난 경우, 문장이 끝날 때까지 미룬다.
+// 이 처리가 없으면 발화 중간의 짧은 멈춤에서 문장이 두 문단으로 쪼개진다.
+let pendingSilenceBreak = false;
+let lastSrcEndedSentence = true;
+
 // 새 발언이 화제를 바꾸는지/이어가는지 앞부분 단어로 가늠한다.
 // 확신이 없는 대부분의 경우는 null을 반환해 안전하게 "여유분 소진" 규칙으로 넘긴다.
 const CUE_SHIFT = [
@@ -609,7 +636,16 @@ function bumpSegment(){
   const finished = segId;      // 지금 떠나는 문단은 완결된 것
   segId++; segLang=''; segChars=0;
   pendingCandidateLen=null; pendingSince=null;
+  pendingSilenceBreak=false; lastSrcEndedSentence=true;
   if(refineOn && !convMode) scheduleRefine(finished);
+}
+
+// 말이 2.5초 이상 끊겼을 때. 문장이 완결된 상태라면 바로 나누고,
+// 문장 중간이라면 다음에 문장이 끝나는 시점까지 분리를 미룬다.
+function onSilenceTimeout(){
+  segSilenceT = null;
+  if(lastSrcEndedSentence) bumpSegment();
+  else pendingSilenceBreak = true;
 }
 
 // 원문이 도착할 때 호출해 문단 전환 여부를 판단한다.
@@ -630,7 +666,7 @@ function noteSource(text){
   if(lang && !segLang) segLang = lang;
 
   if(segSilenceT) clearTimeout(segSilenceT);
-  segSilenceT = setTimeout(bumpSegment, PARA_GAP);
+  segSilenceT = setTimeout(onSilenceTimeout, PARA_GAP);
 
   const before = segId;
   segChars += text.length;
@@ -641,8 +677,17 @@ function noteSource(text){
 // 실제 분리는 여기서 하지 않고 noteSource가 다음 청크를 볼 때 판단한다 —
 // 그래야 "몇 글자 더 보고 나서 정한다"가 정확히 청크 경계에서 이루어진다.
 function noteSourceAfter(lastText){
+  lastSrcEndedSentence = endsSentence(lastText);
+
+  // 침묵으로 미뤄둔 분리가 있고 이제 문장이 끝났다면, 이 문장까지 담고 나눈다
+  if(pendingSilenceBreak && lastSrcEndedSentence){
+    pendingSilenceBreak = false;
+    bumpSegment();
+    return;
+  }
+
   if(segChars <= SEG_SOFT_CHARS){ pendingCandidateLen=null; pendingSince=null; return; }
-  if(endsSentence(lastText)){
+  if(lastSrcEndedSentence){
     if(pendingCandidateLen===null) pendingSince = segChars;
     pendingCandidateLen = segChars;
   }
@@ -1410,6 +1455,7 @@ async function startTranslation(){
   }
   segLang=''; segChars=0; dstSeg=segId; dstPrevEnded=true;
   pendingCandidateLen=null; pendingSince=null;
+  pendingSilenceBreak=false; lastSrcEndedSentence=true;
   refinedSegs.clear(); refineQueue=[]; refineBusy=false;
   longNoticeShown=false;
   hideNotice();
@@ -1489,21 +1535,27 @@ function cleanup(){
   updateCurrentCard();
 }
 function stopTranslation(){
-  const lastSeg = segId;
   const hadContent = currentSession && (currentSession.src.length||currentSession.dst.length);
   cleanup();
-  // 마지막 문단은 bumpSegment를 거치지 않으므로 여기서 직접 보정한다
   if(refineOn && !convMode && hadContent){
     const sess = currentSession;
-    scheduleRefine(lastSeg);
-    setStatus('','대기 중 · 마지막 문단 다듬는 중...');
-    const waitDone = ()=>{
-      if(refineBusy || refineQueue.length){ setTimeout(waitDone, 400); return; }
-      if(sess) upsertSession(sess);   // 보정 결과를 저장에 반영
-      renderSessionList();
-      setStatus('','대기 중 · 회의록 저장됨');
-    };
-    setTimeout(waitDone, 1800);
+    // 마지막 문단은 bumpSegment를 거치지 않아 큐에 없고,
+    // 중지 시점에 아직 처리되지 않은 문단도 남아 있을 수 있으므로 전부 챙긴다.
+    const n = refinePendingAll();
+    if(n > 0){
+      setStatus('','대기 중 · 남은 문단 '+n+'개 다듬는 중...');
+      const t0 = Date.now();
+      const waitDone = ()=>{
+        // 최대 2분까지만 기다린다 — 응답이 없어도 저장은 반드시 하고 끝낸다
+        if((refineBusy || refineQueue.length) && Date.now()-t0 < 120000){
+          setTimeout(waitDone, 400); return;
+        }
+        if(sess) upsertSession(sess);   // 다듬은 결과를 저장에 반영
+        renderSessionList();
+        setStatus('','대기 중 · 회의록 저장됨');
+      };
+      setTimeout(waitDone, 600);
+    }
   }
 }
 
