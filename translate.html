@@ -2,6 +2,11 @@
 <!DOCTYPE html>
 <!--
   Gemini Live Translate
+  v4.7  2026.08.01  한국어 발화 중 간헐적으로 한국어 오디오가 섞여 나오던 문제
+                    수정: echoTargetLanguage:false여도 입력이 그 방향 자신의
+                    타겟 언어와 같을 때 모델이 가끔 음성을 내는 것으로 보여,
+                    감지된 입력 언어가 방향의 타겟과 같으면 오디오 재생만
+                    걸러내도록 함(텍스트는 그대로 유지)
   v4.6  2026.08.01  영→한/한→영 오디오 출력이 정상 확인됨(2분 26초 안정,
                     양방향 모두 음성 재생). 남은 문제인 "몇 단어 재생 후 한
                     단어 스킵" 현상 수정: 부분 청크를 성급하게 내보내던 60ms
@@ -345,7 +350,7 @@
       <label for="soloWsOnly" style="font-size:11px;color:#f0c674;">진단: ws2 끄고 단독 세션만 테스트</label>
     </div>
     <a class="manual-link" href="gemini_translate_manual.pdf" target="_blank" rel="noopener" title="사용 매뉴얼 (PDF)">📖 사용법</a>
-    <div class="version-tag">v4.6 · 2026.08.01</div>
+    <div class="version-tag">v4.7 · 2026.08.01</div>
   </div>
 
   <!-- 대화 모드 안내 배너 -->
@@ -1226,7 +1231,16 @@ let lastMicSendAt = 0;          // 마지막으로 마이크를 보낸 시각 �
 // 캐시된 오디오를 플러시하고 턴을 마무리하게 해야 한다. 지금까지 이 신호를
 // 전혀 보내지 않아, 서버가 계속 발화가 이어지는 것으로 보고 턴을 끝내지
 // 못했을 가능성이 크다(turnComplete가 한 번도 온 적이 없었던 것과 일치).
-let audioStreamEndSent = true;  // 세션 시작 직후는 아직 보낸 적도 없고 보낼 이유도 없는 상태
+let audioStreamEndSent = true;
+// echoTargetLanguage:false로 설정해도, 입력이 이미 그 방향의 타겟 언어와
+// 같을 때 모델이 가끔 예외적으로 음성을 만들어내는 경우가 관찰됐다
+// (예: 한국어를 말했는데 ws2가 간헐적으로 한국어 소리를 냄).
+// 방향별 타겟 언어와 최근 감지된 입력 언어를 기록해, 서로 같을 때는
+// 그 방향의 오디오 재생 자체를 걸러낸다(텍스트는 그대로 둠).
+let wsTargetLang = '';
+const ws2TargetLang = 'ko';
+let wsInputLang = '';
+let ws2InputLang = '';  // 세션 시작 직후는 아직 보낸 적도 없고 보낼 이유도 없는 상태
 let lastServerMsgAt = 0;        // 마지막으로 서버 응답을 받은 시각
 
 // releaseSpeaker()는 문장 사이 짧은 침묵(700ms)마다도 호출되는데, 그때 연속-점유
@@ -1540,6 +1554,7 @@ async function parse(e){
     if(inTxt){
       const info=noteSource(inTxt);
       msgSeg = info.seg;
+      if(info.lang) wsInputLang = info.lang;
       appendText('srcBox',inTxt,'',srcArr,info.seg,info.lang);
     }
     if(sc.outputTranscription?.text)
@@ -1549,7 +1564,10 @@ async function parse(e){
       for(const p of sc.modelTurn.parts){
         if(p.inlineData?.data){
           rxCount.ws.audio++;
-          if(!muted && p.inlineData.mimeType?.startsWith('audio/')){
+          // 입력이 이미 ws의 타겟 언어와 같으면(echo=false인데도 간헐적으로
+          // 나오는 잘못된 음성일 가능성) 재생하지 않고 걸러낸다.
+          const wsAudioOk = !wsTargetLang || wsInputLang!==wsTargetLang;
+          if(!muted && wsAudioOk && p.inlineData.mimeType?.startsWith('audio/')){
             playAudioChunk(base64ToFloat32(p.inlineData.data, PLAYBACK_SR), 'ws');
           }
         }
@@ -1748,12 +1766,22 @@ async function parseConvReverse(e){
     if(sc.turnComplete){ rxCount.ws2.turn++; onTurnComplete('ws2'); }
     if(sc.outputTranscription?.text) rxCount.ws2.text++;
 
+    // ws2가 지금 무슨 언어를 듣고 있는지 감지해둔다(ws2 자신의 오디오 게이트에 사용)
+    if(sc.inputTranscription?.text){
+      const lang2 = detectScript(sc.inputTranscription.text);
+      if(lang2) ws2InputLang = lang2;
+    }
+
     if(sc.outputTranscription?.text) appendDstText(sc.outputTranscription.text,'ko',currentSession?.dst||null);
     if(sc.modelTurn?.parts){
       for(const p of sc.modelTurn.parts){
         if(p.inlineData?.data){
           rxCount.ws2.audio++;
-          if(!muted && p.inlineData.mimeType?.startsWith('audio/'))
+          // 입력이 이미 한국어(ws2의 타겟)면 echo=false에서도 간헐적으로
+          // 새 나오는 음성을 걸러낸다 — 한국어 발화 중 한국어 오디오가
+          // 섞여 나오는 증상의 원인으로 보인다.
+          const ws2AudioOk = ws2InputLang!==ws2TargetLang;
+          if(!muted && ws2AudioOk && p.inlineData.mimeType?.startsWith('audio/'))
             playAudioChunk(base64ToFloat32(p.inlineData.data, PLAYBACK_SR), 'ws2');
         }
       }
@@ -1794,6 +1822,7 @@ async function startTranslation(){
   resumptionHandle = null;
   reconnectTries = 0;
   ws2Tries = 0;
+  wsInputLang = ''; ws2InputLang = '';
   micMuteUntil = 0;
   micBlockedSince = 0;
   lastMicSendAt = 0;
@@ -1869,6 +1898,7 @@ async function startTranslation(){
     const fl = document.getElementById('convLang').value;
     // echo=false 필수: true면 이미 대상 언어인 발화도 되읽어서 음성이 2중으로 겹침
     // 두 세션을 동시에 열면 서버가 한쪽을 거부하는 경우가 있어 시차를 둔다
+    wsTargetLang = fl;
     ws  = openWS(key, fl,   false, parse,            'ws');   // 내 한국어 → 외국어 음성
     const soloOnly = document.getElementById('soloWsOnly')?.checked;
     if(soloOnly){
