@@ -2,6 +2,10 @@
 <!DOCTYPE html>
 <!--
   Gemini Live Translate
+  v5.5  2026.08.01  모드별 API 비용 추정치를 화면에 표시(회의 $2.2/시간,
+                    대화 $4.4/시간, 모드 전환 시 자동 갱신)
+  v5.4  2026.08.01  실험적 Light 버전(텍스트 전용, 비용 절감 시도) 링크 추가.
+                    설정 패널에 서로 오갈 수 있는 상호 링크 삽입
   v5.3  2026.08.01  회의록 목록에 다중 선택 삭제 기능 추가("선택" 버튼 →
                     체크박스로 여러 개 골라 한번에 삭제)
   v5.2  2026.08.01  회의 모드 문단 분리 재발 수정: 길이(여유분 80자) 기반 분리가
@@ -374,7 +378,8 @@
       </select>
     </div>
     <a class="manual-link" href="gemini_translate_manual.pdf" target="_blank" rel="noopener" title="사용 매뉴얼 (PDF)">📖 사용법</a>
-    <div class="version-tag">v5.3 · 2026.08.01</div>
+    <a class="manual-link" href="gemini_translate_light.html" title="비용을 아낀 실험적 텍스트 전용 버전(개발 중)">🟢 Light 버전</a>
+    <div class="version-tag">v5.5 · 2026.08.01<br><span id="costLabel" style="font-size:9px;color:#0a84ff;"></span></div>
   </div>
 
   <!-- 대화 모드 안내 배너 -->
@@ -1147,6 +1152,15 @@ function setMute(v){
   localStorage.setItem('gt_muted', muted?'1':'0');
 }
 
+// 모드별 API 비용 추정치를 보여준다. 실측(음성이 계속 켜져 있는
+// gemini-3.5-live-translate-preview, 오디오 입출력 강제 청구 기준) 값이며,
+// 실제 발화량·언어에 따라 다소 달라질 수 있는 추정치다.
+function updateCostLabel(){
+  const el = document.getElementById('costLabel');
+  if(!el) return;
+  el.textContent = convMode ? '대화모드 API 비용 ≈ $4.4/1hr' : '회의모드 API 비용 ≈ $2.2/1hr';
+}
+
 function toggleMode(){
   convMode = !convMode;
   // 회의 모드는 음소거 기본값(사용자가 나중에 저장된 선호로 바꿀 수 있음),
@@ -1175,6 +1189,7 @@ function toggleMode(){
     sgSession.classList.remove('hidden');
   }
   updateLabels();
+  updateCostLabel();
   updateConvDiag();
   localStorage.setItem('gt_mode', convMode ? '1' : '0');
   // 실행 중이면 재시작 안내
@@ -1517,6 +1532,7 @@ document.getElementById('meetingLang')?.addEventListener('change', ()=>{ saveSet
 document.getElementById('convLang')?.addEventListener('change', ()=>{ saveSettings(); updateLabels(); });
 updateLabels();
 loadSettings();
+updateCostLabel();
 
 async function copyCol(boxId,btnId){
   const text=Array.from(document.getElementById(boxId).querySelectorAll('.pt')).map(el=>el.textContent.trim()).filter(Boolean).join('\n\n');
