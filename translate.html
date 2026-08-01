@@ -2,6 +2,10 @@
 <!DOCTYPE html>
 <!--
   Gemini Live Translate
+  v4.9  2026.08.01  실증 확인(7분 안정, 오디오 끊김 완전 해소). "같은 화자인데
+                    문장마다 성우가 바뀐다" 문제 수정: speechConfig로 음성을
+                    방향별로 고정(ws=Puck, ws2=Kore) — 지금까지 미지정 상태라
+                    모델이 매 턴 임의로 목소리를 고르고 있었음
   v4.8  2026.08.01  오디오 끊김(버퍼링 현상)은 해결 확인됨. 남은 문제인
                     "가끔 3~4단어가 통째로 안 들리는" 현상 대응: 마이크
                     콜백(128ms마다 실행)에서 ws·ws2용 JSON을 중복 직렬화
@@ -354,7 +358,7 @@
       <label for="soloWsOnly" style="font-size:11px;color:#f0c674;">진단: ws2 끄고 단독 세션만 테스트</label>
     </div>
     <a class="manual-link" href="gemini_translate_manual.pdf" target="_blank" rel="noopener" title="사용 매뉴얼 (PDF)">📖 사용법</a>
-    <div class="version-tag">v4.8 · 2026.08.01</div>
+    <div class="version-tag">v4.9 · 2026.08.01</div>
   </div>
 
   <!-- 대화 모드 안내 배너 -->
@@ -1651,7 +1655,13 @@ function startMicProcessor(){
 // 서버가 setup을 거부하면 자동으로 1단계로 내려가 스스로 복구한다
 let setupTier = 0;
 
-function buildSetup(targetLang, isEcho){
+// 지금까지 음성을 고정하지 않아 모델이 매 턴마다 임의로 목소리를 골랐다.
+// 방향마다 고정된 음성을 지정해 (1) 같은 방향은 항상 같은 목소리로 말하고,
+// (2) 두 방향의 목소리를 다르게 해서 어느 쪽이 말하는지 귀로 구분하기 쉽게 한다.
+const VOICE_WS  = 'Puck';   // 내 말 → 외국어(ws)
+const VOICE_WS2  = 'Kore';  // 상대 말 → 한국어(ws2)
+
+function buildSetup(targetLang, isEcho, voiceName){
   const s = {
     model:'models/gemini-3.5-live-translate-preview',
     generationConfig:{
@@ -1659,6 +1669,9 @@ function buildSetup(targetLang, isEcho){
       translationConfig:{ targetLanguageCode:targetLang, echoTargetLanguage:!!isEcho }
     }
   };
+  if(voiceName){
+    s.generationConfig.speechConfig = { voiceConfig:{ prebuiltVoiceConfig:{ voiceName } } };
+  }
   if(setupTier === 0){
     // 아래 두 항목은 generationConfig가 아니라 setup 최상위 필드다
     s.contextWindowCompression = { slidingWindow:{} };
@@ -1668,13 +1681,14 @@ function buildSetup(targetLang, isEcho){
 }
 
 function openWS(key, targetLang, isEcho, onMsg, assignTo){
+  const voiceName = assignTo==='ws2' ? VOICE_WS2 : VOICE_WS;
   const url='wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key='+key;
   const socket = new WebSocket(url);
   socket.binaryType = 'blob';
   socket._gotData = false;   // 서버 응답을 한 번이라도 받았는지 (setup 성공 판정)
   socket.onopen = () => {
     socket._openedAt = Date.now();
-    socket.send(JSON.stringify({setup: buildSetup(targetLang, isEcho)}));
+    socket.send(JSON.stringify({setup: buildSetup(targetLang, isEcho, voiceName)}));
     if(assignTo === 'ws'){
       const label = convMode
         ? '🗣 대화 모드 — '+langPairLabel(currentSession?currentSession.lang:'conv|en')
