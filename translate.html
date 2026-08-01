@@ -2,6 +2,10 @@
 <!DOCTYPE html>
 <!--
   Gemini Live Translate
+  v4.8  2026.08.01  오디오 끊김(버퍼링 현상)은 해결 확인됨. 남은 문제인
+                    "가끔 3~4단어가 통째로 안 들리는" 현상 대응: 마이크
+                    콜백(128ms마다 실행)에서 ws·ws2용 JSON을 중복 직렬화
+                    하던 것을 1회로 통합해 메인 스레드 부담 축소
   v4.7  2026.08.01  한국어 발화 중 간헐적으로 한국어 오디오가 섞여 나오던 문제
                     수정: echoTargetLanguage:false여도 입력이 그 방향 자신의
                     타겟 언어와 같을 때 모델이 가끔 음성을 내는 것으로 보여,
@@ -350,7 +354,7 @@
       <label for="soloWsOnly" style="font-size:11px;color:#f0c674;">진단: ws2 끄고 단독 세션만 테스트</label>
     </div>
     <a class="manual-link" href="gemini_translate_manual.pdf" target="_blank" rel="noopener" title="사용 매뉴얼 (PDF)">📖 사용법</a>
-    <div class="version-tag">v4.7 · 2026.08.01</div>
+    <div class="version-tag">v4.8 · 2026.08.01</div>
   </div>
 
   <!-- 대화 모드 안내 배너 -->
@@ -1627,14 +1631,15 @@ function startMicProcessor(){
       micBlockedSince = 0;   // 막혀있지 않은 정상 상태 — 시계 리셋
     }
     const data = b64(f32i16(ev.inputBuffer.getChannelData(0)));
+    // ws·ws2에 보내는 내용이 완전히 같으므로 문자열을 한 번만 만들어 재사용한다.
+    // 128ms마다 반복되는 이 콜백에서 직렬화를 두 번 하던 게 메인 스레드
+    // 부담을 키워, 처리가 살짝 밀리면 다음 오디오 프레임 자체가 통째로
+    // 건너뛰어지는 원인이 됐을 수 있다(몇 단어가 안 들리는 증상과 부합).
     let sent = false;
-    if(ws && ws.readyState===1){
-      ws.send(JSON.stringify({realtimeInput:{audio:{data, mimeType:'audio/pcm;rate=16000'}}}));
-      sent = true;
-    }
-    if(convMode && ws2 && ws2.readyState===1){
-      ws2.send(JSON.stringify({realtimeInput:{audio:{data, mimeType:'audio/pcm;rate=16000'}}}));
-      sent = true;
+    if((ws && ws.readyState===1) || (convMode && ws2 && ws2.readyState===1)){
+      const payload = JSON.stringify({realtimeInput:{audio:{data, mimeType:'audio/pcm;rate=16000'}}});
+      if(ws && ws.readyState===1){ ws.send(payload); sent = true; }
+      if(convMode && ws2 && ws2.readyState===1){ ws2.send(payload); sent = true; }
     }
     if(sent){ lastMicSendAt = Date.now(); micBlockedSince = 0; audioStreamEndSent = false; }
   };
