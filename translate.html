@@ -2,6 +2,13 @@
 <!DOCTYPE html>
 <!--
   Gemini Live Translate
+  v5.3  2026.08.01  회의록 목록에 다중 선택 삭제 기능 추가("선택" 버튼 →
+                    체크박스로 여러 개 골라 한번에 삭제)
+  v5.2  2026.08.01  회의 모드 문단 분리 재발 수정: 길이(여유분 80자) 기반 분리가
+                    침묵 분리와 달리 문장 중간 여부를 확인하지 않고 즉시 잘라
+                    "make | the Fed's..." 처럼 진행 중인 문장이 쪼개지는 경우가
+                    있었다. 길이 기반 분리도 문장 중간이면 완결까지 미루도록
+                    침묵 분리와 같은 pendingSilenceBreak 메커니즘을 공유하게 함
   v5.1  2026.08.01  실증 확인(API 키 1개만으로 정상 작동 확인됨) — 대화 모드 완성
                     단계 진입. 디버깅용 UI 정리: 두 번째 API Key 입력창,
                     "ws2 끄고 단독 테스트" 진단 체크박스 제거. 상태 표시줄을
@@ -260,6 +267,16 @@
   .session-info .sname { font-size: 14px; font-weight: 500; color: #e0e0e0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .session-info .smeta { font-size: 11px; color: #555; margin-top: 2px; }
   .session-del { font-size: 12px; color: #ff453a; background: transparent; border: 0.5px solid #ff453a44; border-radius: 6px; padding: 3px 8px; cursor: pointer; flex-shrink: 0; }
+  .select-toggle-btn { font-size: 12px; color: #888; background: transparent; border: 0.5px solid #444; border-radius: 6px; padding: 3px 9px; cursor: pointer; }
+  .select-toggle-btn.on { color: #0a84ff; border-color: #0a84ff55; background: #0a84ff11; }
+  .bulk-action-bar { display: flex; align-items: center; gap: 10px; padding: 8px 2px; margin-bottom: 8px; }
+  .bulk-action-bar.hidden { display: none; }
+  .bulk-all-label { font-size: 13px; color: #ccc; display: flex; align-items: center; gap: 6px; cursor: pointer; }
+  .bulk-del-btn { font-size: 12px; color: #fff; background: #ff453a; border: none; border-radius: 6px; padding: 5px 11px; cursor: pointer; }
+  .bulk-del-btn:disabled { background: #ff453a44; color: #ffffff88; cursor: default; }
+  .bulk-cancel-btn { font-size: 12px; color: #888; background: transparent; border: 0.5px solid #444; border-radius: 6px; padding: 5px 11px; cursor: pointer; }
+  .session-item.selectable { cursor: pointer; }
+  .session-checkbox { width: 18px; height: 18px; flex-shrink: 0; }
   .empty-msg { color: #444; font-size: 13px; text-align: center; padding: 2rem 0; }
 
   /* 세션 상세 모달 — 전체화면, 스크롤 보장 */
@@ -357,7 +374,7 @@
       </select>
     </div>
     <a class="manual-link" href="gemini_translate_manual.pdf" target="_blank" rel="noopener" title="사용 매뉴얼 (PDF)">📖 사용법</a>
-    <div class="version-tag">v5.1 · 2026.08.01</div>
+    <div class="version-tag">v5.3 · 2026.08.01</div>
   </div>
 
   <!-- 대화 모드 안내 배너 -->
@@ -426,7 +443,16 @@
     <!-- 저장된 세션 목록 -->
     <div class="section-title" style="display:flex;align-items:center;justify-content:space-between;">
       <span>저장된 회의록</span>
-      <span id="storageLabel" class="storage-label"></span>
+      <span style="display:flex;align-items:center;gap:8px;">
+        <span id="storageLabel" class="storage-label"></span>
+        <button class="select-toggle-btn" id="selectToggleBtn" onclick="toggleSelectMode()">선택</button>
+      </span>
+    </div>
+    <div id="bulkActionBar" class="bulk-action-bar hidden">
+      <label class="bulk-all-label"><input type="checkbox" id="selectAllBox" onchange="toggleSelectAll(this.checked)"> 전체 선택</label>
+      <span style="flex:1"></span>
+      <button class="bulk-del-btn" id="bulkDelBtn" onclick="bulkDeleteSelected()" disabled>선택 삭제 (0)</button>
+      <button class="bulk-cancel-btn" onclick="toggleSelectMode()">취소</button>
     </div>
     <div id="sessionList"><div class="empty-msg">저장된 세션이 없습니다</div></div>
 
@@ -755,7 +781,12 @@ function noteSource(text){
   } else if(pendingCandidateLen!=null){
     const cue = classifyCue(text);
     if(cue==='shift' || (segChars - pendingSince) >= SEG_LOOKAHEAD_CHARS){
-      bumpSegment();  // 화제 전환 신호가 나왔거나, 여유분(80자)을 다 봤다 — 후보 지점에서 분리
+      // 분리하기로 결정했다. 그런데 그 사이(후보 지점 이후) 새로운 문장이
+      // 이미 시작돼 아직 안 끝난 상태라면, 지금 자르면 그 문장이 두 문단으로
+      // 쪼개진다. 침묵 분리와 같은 방식으로 — 지금 당장 자르지 않고
+      // 문장이 끝날 때까지 미룬다.
+      if(lastSrcEndedSentence) bumpSegment();
+      else pendingSilenceBreak = true;
     }
     // cue==='continue' 이거나 아직 여유분이 남아있으면 같은 문단에 계속 이어붙인다
   }
@@ -2051,20 +2082,81 @@ function saveCurrentSession(){
   }
 }
 
+// ── 회의록 다중 선택 삭제 ──
+let selectMode = false;
+const selectedIds = new Set();
+
+function toggleSelectMode(){
+  selectMode = !selectMode;
+  selectedIds.clear();
+  const btn = document.getElementById('selectToggleBtn');
+  const bar = document.getElementById('bulkActionBar');
+  btn.textContent = selectMode ? '완료' : '선택';
+  btn.classList.toggle('on', selectMode);
+  bar.classList.toggle('hidden', !selectMode);
+  const allBox = document.getElementById('selectAllBox');
+  if(allBox) allBox.checked = false;
+  renderSessionList();
+}
+
+function toggleSessionSelect(id, checked){
+  if(checked) selectedIds.add(id); else selectedIds.delete(id);
+  updateBulkDelButton();
+}
+
+function toggleSelectAll(checked){
+  const sessions = getSessions();
+  selectedIds.clear();
+  if(checked) sessions.forEach(s=>selectedIds.add(s.id));
+  renderSessionList();
+}
+
+function updateBulkDelButton(){
+  const btn = document.getElementById('bulkDelBtn');
+  if(!btn) return;
+  btn.textContent = '선택 삭제 ('+selectedIds.size+')';
+  btn.disabled = selectedIds.size===0;
+  const sessions = getSessions();
+  const allBox = document.getElementById('selectAllBox');
+  if(allBox) allBox.checked = sessions.length>0 && selectedIds.size===sessions.length;
+}
+
+function bulkDeleteSelected(){
+  if(!selectedIds.size) return;
+  if(!confirm(selectedIds.size+'개 회의록을 삭제하시겠습니까?')) return;
+  setSessions(getSessions().filter(s=>!selectedIds.has(s.id)));
+  selectedIds.clear();
+  renderSessionList();
+  updateStorageLabel();
+  if(storagePct()<70) hideNotice();
+}
+
 function renderSessionList(){
   const sessions=getSessions();
   const container=document.getElementById('sessionList');
-  if(!sessions.length){container.innerHTML='<div class="empty-msg">저장된 세션이 없습니다</div>';return;}
+  if(!sessions.length){container.innerHTML='<div class="empty-msg">저장된 세션이 없습니다</div>';updateBulkDelButton();return;}
   container.innerHTML=sessions.map(s=>{
     const[dst,src]=s.lang.split('|');
+    const meta = `${s.startTimeStr}${formatDuration(s.durationSec)?' · '+formatDuration(s.durationSec):''} · ${langPairLabel(s.lang)} · ${s.dst.length}개 문단`;
+    if(selectMode){
+      const checked = selectedIds.has(s.id) ? 'checked' : '';
+      return `<div class="session-item selectable" onclick="const cb=this.querySelector('.session-checkbox'); cb.checked=!cb.checked; toggleSessionSelect('${s.id}', cb.checked);">
+        <input type="checkbox" class="session-checkbox" ${checked} onclick="event.stopPropagation(); toggleSessionSelect('${s.id}', this.checked);">
+        <div class="session-info">
+          <div class="sname">${s.name}</div>
+          <div class="smeta">${meta}</div>
+        </div>
+      </div>`;
+    }
     return `<div class="session-item" onclick="openModal('${s.id}')">
       <div class="session-info">
         <div class="sname">${s.name}</div>
-        <div class="smeta">${s.startTimeStr}${formatDuration(s.durationSec)?' · '+formatDuration(s.durationSec):''} · ${langPairLabel(s.lang)} · ${s.dst.length}개 문단</div>
+        <div class="smeta">${meta}</div>
       </div>
       <button class="session-del" onclick="deleteSession(event,'${s.id}')">삭제</button>
     </div>`;
   }).join('');
+  updateBulkDelButton();
 }
 
 function deleteSession(e,id){
