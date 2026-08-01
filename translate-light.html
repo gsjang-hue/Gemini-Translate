@@ -131,6 +131,18 @@
   v1.0              실시간 번역(텍스트 전용, 음성 출력 없음)
 
 === Light 버전 (실험적 분기, 회의 모드 전용) ===
+  L0.5  2026.08.01  긴급 수정: L0.4 정리 작업이 실제로 쓰이는 핵심 함수까지
+                    같이 지웠던 버그 수정 — toggleSettings·toggleRefine
+                    (설정·다듬기 버튼이 안 열리던 원인), startElapsed·
+                    stopElapsed·startAutoSave·stopAutoSave·showSaveHint·
+                    formatDuration·getCurrentDurationSec 총 9개 함수와
+                    관련 상태 변수를 백업본에서 대조 복원. 이번엔 onclick
+                    전수 대조 + 모의 DOM 실행 테스트로 검증 후 배포
+  L0.4  2026.08.01  기본 버전 링크 주소 수정(절대 URL로 교체). 코드 정리 —
+                    아키텍처 교체 후에도 남아있던 죽은 코드(오디오 재생·
+                    스피커 조율·마이크 게이트·대화모드 진단 등 약 460줄)를
+                    제거해 2408줄 → 1949줄로 축소. muted·ws·ws2·rxCount 등
+                    더 이상 쓰이지 않는 변수·CSS 클래스도 함께 정리
   L0.2  2026.08.01  아키텍처 전면 교체: gemini-3.1-flash-live-preview는
                     responseModalities TEXT 단독을 지원하지 않아(1007 오류)
                     L0.1 방식이 애초에 작동 불가였음. WebSocket Live 세션을
@@ -186,17 +198,12 @@
   .ctrl-toggle.open { color: #30d158; border-color: #30d15844; background: #30d15811; }
   .voice-toggle { background: transparent; border: 0.5px solid #333; border-radius: 7px; font-size: 14px; padding: 4px 8px; cursor: pointer; flex-shrink: 0; color: #888; }
   .voice-toggle.on { color: #30d158; border-color: #30d15844; background: #30d15811; }
-  .mode-btn { font-size: 12px; padding: 4px 9px; border-radius: 7px; border: 0.5px solid #444; background: transparent; color: #888; cursor: pointer; flex-shrink: 0; white-space: nowrap; }
-  .mode-btn.conv { background: #2a1a3a; color: #bf5fff; border-color: #bf5fff55; }
-  .mute-btn { font-size: 14px; padding: 4px 8px; border-radius: 7px; border: 0.5px solid #333; background: transparent; color: #777; cursor: pointer; flex-shrink: 0; }
-  .mute-btn.on { color: #30d158; border-color: #30d15844; background: #30d15811; }
   .refine-btn { font-size:12px; padding:4px 9px; border-radius:7px; border:0.5px solid #444; background:transparent; color:#888; cursor:pointer; flex-shrink:0; white-space:nowrap; }
   .refine-btn.on { color:#f0c674; border-color:#f0c67455; background:#f0c67411; }
   .manual-link { font-size:12px; padding:4px 9px; border-radius:7px; border:0.5px solid #444; background:transparent; color:#888; cursor:pointer; flex-shrink:0; white-space:nowrap; text-decoration:none; display:inline-flex; align-items:center; align-self:flex-end; }
   .manual-link:hover, .manual-link:active { color:#30d158; border-color:#30d15855; background:#30d15811; }
   .refine-tag { display:inline-block; font-size:9px; color:#f0c674; border:0.5px solid #f0c67455; border-radius:3px; padding:0 4px; margin-right:6px; vertical-align:1px; letter-spacing:0.04em; }
   .refining { opacity:0.75; }
-  .conv-banner { padding: 6px 1rem; font-size: 12px; color: #bf5fff; background: #1a0d2a; border-bottom: 0.5px solid #bf5fff33; flex-shrink: 0; text-align: center; letter-spacing: 0.03em; }
 
   /* ── 접히는 설정 패널 ── */
   .settings { padding: 0.5rem 0.8rem; border-bottom: 0.5px solid #2a2a2a; display: flex; gap: 8px; align-items: flex-end; flex-wrap: wrap; flex-shrink: 0; background: #131313; overflow: hidden; transition: max-height 0.2s ease, padding 0.2s ease; max-height: 200px; }
@@ -258,7 +265,6 @@
   .notice-action { background:rgba(255,255,255,0.12); border:0.5px solid currentColor; color:inherit; font-size:11px; padding:3px 9px; border-radius:6px; cursor:pointer; flex-shrink:0; white-space:nowrap; }
   .notice-action.hidden { display:none; }
   .save-hint { font-size:10px; color:#4a7a4a; opacity:0.35; transition:opacity 0.3s; white-space:nowrap; }
-  .conv-diag { font-size:10px; color:#4a7a4a; white-space:nowrap; }
   .storage-label { font-size:10px; color:#555; font-weight:400; letter-spacing:0; text-transform:none; }
   .trim-note { font-size:10px; color:#4a4a4a; border:0.5px dashed #333; border-radius:6px; padding:5px 8px; margin-bottom:10px; line-height:1.5; }
   .version-tag { font-size: 10px; color: #3d3d3d; align-self: flex-end; margin-left: auto; padding-bottom: 2px; letter-spacing: 0.03em; }
@@ -385,8 +391,8 @@
       </select>
     </div>
     <a class="manual-link" href="gemini_translate_manual.pdf" target="_blank" rel="noopener" title="사용 매뉴얼 (PDF)">📖 사용법</a>
-    <a class="manual-link" href="gemini_translate.html" title="음성 출력·대화 모드가 있는 기본 버전으로 이동">🔵 기본 버전</a>
-    <div class="version-tag">Light v0.2 · 2026.08.01</div>
+    <a class="manual-link" href="https://gsjang-hue.github.io/Gemini-Translate/translate.html" title="음성 출력·대화 모드가 있는 기본 버전으로 이동">🔵 기본 버전</a>
+    <div class="version-tag">Light v0.5 · 2026.08.01<br><span style="font-size:9px;color:#30d158;">API 비용 추정 ≈ $0.15/1hr</span></div>
   </div>
 
   <!-- 공용 안내 배너 (저장 공간·긴 세션 경고) -->
@@ -402,7 +408,6 @@
     <span id="elapsed" class="elapsed"></span>
     <span id="chunkStatus" class="elapsed" style="color:#30d158;"></span>
     <span id="saveHint" class="save-hint"></span>
-    <span id="convDiag" class="conv-diag"></span>
     <span class="err" id="err"></span>
     <span class="font-ctrl">
       <button onclick="adjustFont(-1)" title="글자 작게">A−</button>
@@ -495,14 +500,9 @@
 // ══════════════════════════════════════
 // 상태 변수
 // ══════════════════════════════════════
-let ws=null, stream=null, actx=null, proc=null;
-let ws2=null; // 대화 모드 역방향 세션
-let convMode = false;   // false=회의모드, true=대화모드
-let muted = true;   // 기본은 음소거 (회의 모드 = 텍스트만)
-let audioQueue = [];
-let isPlayingAudio = false;
+let stream=null, actx=null, proc=null;
+let convMode = false;   // false=회의모드 (라이트 버전은 회의 모드 전용)
 const SR=16000;
-const PLAYBACK_SR=24000;
 const langName={ko:'한국어',en:'영어',ja:'일본어',zh:'중국어'};
 const PARA_GAP=2500;
 
@@ -710,9 +710,6 @@ const SEG_HARD_CHARS = 1500;     // 문장 부호가 계속 없으면 이 길이
 // 이제 마지막 오류를 기록해 진단 줄에 그대로 노출한다.
 let lastParseError = null;
 let lastParseErrorAt = 0;
-// 클라이언트 쪽은 전부 정상인데 기능이 안 되면, 서버가 애초에 오디오를
-// 안 보내고 있는지 직접 세어보는 수밖에 없다. ws/ws2 각각 텍스트·오디오·턴종료 수신 횟수.
-const rxCount = { ws:{text:0, audio:0, turn:0}, ws2:{text:0, audio:0, turn:0} };
 
 let pendingCandidateLen = null;  // 가장 최근 후보 지점의 누적 글자수
 let pendingSince = null;         // 첫 후보가 나온 시점의 누적 글자수(여유분 측정 기준)
@@ -1009,114 +1006,9 @@ function hideNotice(){
   noticeActionFn=null;
 }
 
-// ── 대화 모드 상태 표시 ──
-// 디버깅 과정에서 쌓인 세부 진단(수신 카운트, 마이크 게이트 상태 등)은
-// 문제가 해결되어 더 이상 필요 없으므로, 연결 상태와 오류만 남긴다.
-function updateConvDiag(){
-  const el = document.getElementById('convDiag');
-  if(!el) return;
-  if(!convMode){ el.textContent=''; return; }
-  const fl = document.getElementById('convLang')?.value || 'en';
-  const up = (ws && ws.readyState===1) ? '✓' : '✕';
-  const dn = (ws2 && ws2.readyState===1) ? '✓' : '✕';
-  const errRecent = lastParseError && (Date.now()-lastParseErrorAt) < 10000;
-  const errTag = errRecent ? (' · ⚠ '+lastParseError) : '';
-  el.textContent = '한국어→'+(langName[fl]||fl)+' '+up+' / '+(langName[fl]||fl)+'→한국어 '+dn+errTag;
-  el.style.color = (up!=='✓' || dn!=='✓' || errRecent) ? '#f0c674' : '#4a7a4a';
-  if(errRecent) el.style.color = '#ff453a';
-}
 
-// ── 경과 시간 ──
-let elapsedInt=null, startedAt=0;
-let longNoticeShown=false;
-let silentNoticeShown=false;
 
-// ── 주기적 자동 저장 ──
-// 중지 시점에만 저장하면 긴 회의 중 페이지가 죽었을 때 전부 잃는다.
-let autoSaveInt=null;
-const AUTOSAVE_MS = 5*60*1000;   // 5분
-
-function startAutoSave(){
-  clearInterval(autoSaveInt);
-  autoSaveInt=setInterval(()=>{
-    if(!currentSession) return;
-    if(!currentSession.src.length && !currentSession.dst.length) return;
-    // durationSec 본값은 중지 시에만 확정한다. 자동 저장에는 지금까지의
-    // 진행 시간을 실은 스냅샷만 저장해, 다음 자동 저장 때 중복 합산되지 않게 한다.
-    const snapshot = {...currentSession, durationSec: getCurrentDurationSec(currentSession)};
-    if(upsertSession(snapshot)){
-      showSaveHint('자동 저장 ' + new Date().toTimeString().slice(0,5));
-      checkStorage();
-    }
-  }, AUTOSAVE_MS);
-}
-function stopAutoSave(){ clearInterval(autoSaveInt); autoSaveInt=null; }
-
-function showSaveHint(text){
-  const el=document.getElementById('saveHint');
-  if(!el) return;
-  el.textContent='💾 '+text;
-  el.style.opacity='1';
-  setTimeout(()=>{ el.style.opacity='0.35'; }, 2500);
-}
-function startElapsed(){
-  startedAt=Date.now();
-  clearInterval(elapsedInt);
-  elapsedInt=setInterval(()=>{
-    const s=Math.floor((Date.now()-startedAt)/1000);
-    const mm=String(Math.floor(s/60)%60).padStart(2,'0'), ss=String(s%60).padStart(2,'0');
-    const el=document.getElementById('elapsed');
-    if(el) el.textContent=(s>=3600? Math.floor(s/3600)+':' : '')+mm+':'+ss;
-    // 마이크/재생 컨텍스트가 정지 상태로 빠졌는지 매초 확인해 즉시 되살린다.
-    // iOS는 두 컨텍스트가 동시에 있을 때 한쪽을 조용히 정지시키는 경우가 있는데,
-    // 이 감시가 없으면 화면엔 아무 표시 없이 마이크만 영구히 죽는다.
-    if(actx && actx.state==='suspended'){
-      try{ actx.resume(); }catch(_){}
-      showNotice('마이크가 일시 정지되어 자동으로 재개했습니다. 계속 안 되면 중지 후 다시 시작해 주세요.', 'warn');
-    }
-    if(playCtx && playCtx.state==='suspended' && !muted){
-      try{ playCtx.resume(); }catch(_){}
-    }
-
-    updateConvDiag();
-
-    // 소켓은 열려 있는데 서버 응답이 오래 끊긴 경우를 알려준다.
-    // 예전에는 이 상황에서 아무 표시 없이 경과시간만 흘렀다.
-    if(lastServerMsgAt && (Date.now()-lastServerMsgAt) > 15000 && !silentNoticeShown){
-      silentNoticeShown = true;
-      showNotice('15초 이상 서버 응답이 없습니다. 소리가 마이크에 닿는지 확인하고, 계속되면 중지 후 다시 시작해 주세요.', 'warn');
-    }
-    if(lastServerMsgAt && (Date.now()-lastServerMsgAt) < 5000 && silentNoticeShown){
-      silentNoticeShown = false;   // 응답이 돌아오면 안내를 내린다
-      hideNotice();
-    }
-
-    // 2시간을 넘기면 세션을 나누도록 한 번 안내한다
-    if(s>=7200 && !longNoticeShown){
-      longNoticeShown=true;
-      showNotice('2시간이 지났습니다. 중지 후 새 세션으로 나누면 저장 실패와 성능 저하를 예방할 수 있습니다.', 'warn');
-    }
-  },1000);
-}
-function stopElapsed(){ clearInterval(elapsedInt); elapsedInt=null; }
-
-// 세션의 누적 소요시간(초). 진행 중이면 이번 구간까지 더해 계산한다.
-// currentSession.durationSec 자체는 건드리지 않아 중복 합산을 막는다.
-function getCurrentDurationSec(session){
-  let base = (session && session.durationSec) || 0;
-  if(session===currentSession && elapsedInt && startedAt){
-    base += Math.floor((Date.now()-startedAt)/1000);
-  }
-  return base;
-}
-
-// 초 → "1시간 12분" / "12분" 형태로 표시. 1분 미만은 표시하지 않는다(의미가 적음).
-function formatDuration(sec){
-  if(!sec || sec<60) return '';
-  const h=Math.floor(sec/3600), m=Math.floor((sec%3600)/60);
-  return h>0 ? (h+'시간 '+m+'분') : (m+'분');
-}
-
+// ── 설정 저장/불러오기 ──
 function toggleSettings(){
   const panel = document.getElementById('settingsPanel');
   const btn = document.getElementById('settingsToggle');
@@ -1132,306 +1024,6 @@ function toggleRefine(){
   localStorage.setItem('gtl_refine', refineOn?'1':'0');
 }
 
-function toggleMute(){
-  muted = !muted;
-  const b=document.getElementById('muteBtn');
-  b.textContent = muted ? '🔇' : '🔊';
-  b.classList.toggle('on', !muted);
-  if(muted){
-    // 대기 중인 소리를 즉시 버려서 음소거가 바로 걸리도록
-    if(flushT){ clearTimeout(flushT); flushT=null; }
-    pendBufs=[]; pendLen=0;
-  } else {
-    initPlayback();   // 버튼 클릭 = 사용자 조작이므로 이 시점에 오디오를 열 수 있다
-  }
-  localStorage.setItem('gtl_muted', muted?'1':'0');
-  localStorage.setItem('gtl_muted_mode', convMode?'1':'0');   // 어느 모드에서 저장했는지 함께 기록
-}
-
-function setMute(v){
-  muted=v;
-  const b=document.getElementById('muteBtn');
-  if(b){ b.textContent = muted?'🔇':'🔊'; b.classList.toggle('on', !muted); }
-  localStorage.setItem('gtl_muted', muted?'1':'0');
-}
-
-function toggleMode(){
-  convMode = !convMode;
-  // 회의 모드는 음소거 기본값(사용자가 나중에 저장된 선호로 바꿀 수 있음),
-  // 대화 모드는 항상 강제로 켠다 — 저장값과 무관하게 매번 확실히 켠다.
-  muted = convMode ? false : true;
-  const mb=document.getElementById('muteBtn');
-  if(mb){ mb.textContent = muted?'🔇':'🔊'; mb.classList.toggle('on', !muted); }
-  if(convMode) initPlayback();   // 모드 전환도 사용자 조작이므로 여기서 오디오를 열 수 있다
-  const btn = document.getElementById('modeBtn');
-  const banner = document.getElementById('convBanner');
-  const sgMeeting = document.getElementById('sgMeetingLang');
-  const sgConv = document.getElementById('sgConvLang');
-  const sgSession = document.getElementById('sgSession');
-
-  if(convMode){
-    btn.textContent = '🗣 대화'; btn.classList.add('conv');
-    banner.classList.remove('hidden');
-    sgMeeting.classList.add('hidden');
-    sgConv.classList.remove('hidden');
-    sgSession.classList.add('hidden');
-  } else {
-    btn.textContent = '📋 회의'; btn.classList.remove('conv');
-    banner.classList.add('hidden');
-    sgMeeting.classList.remove('hidden');
-    sgConv.classList.add('hidden');
-    sgSession.classList.remove('hidden');
-  }
-  updateLabels();
-  updateConvDiag();
-  localStorage.setItem('gtl_mode', convMode ? '1' : '0');
-  // 실행 중이면 재시작 안내
-  if(ws && ws.readyState===1){
-    showErr('모드 변경 후 중지 → 시작 버튼을 눌러주세요');
-    setTimeout(()=>showErr(''), 3000);
-  }
-}
-
-// ── PCM base64 → Float32 디코딩 후 재생 ──
-function base64ToFloat32(b64, sampleRate){
-  const binary = atob(b64);
-  const bytes = new Uint8Array(binary.length);
-  for(let i=0;i<binary.length;i++) bytes[i]=binary.charCodeAt(i);
-  const int16 = new Int16Array(bytes.buffer);
-  const float32 = new Float32Array(int16.length);
-  for(let i=0;i<int16.length;i++) float32[i]=int16[i]/32768.0;
-  return float32;
-}
-
-// ══════════════════════════════════════
-// 음성 재생 — 지터 버퍼 + 청크 병합 스케줄러
-//
-// 이전 구현이 두세 음절마다 끊긴 이유:
-//  (1) 여유 시간 없이 ctx.currentTime에 바로 재생을 걸어서
-//      네트워크가 조금만 늦어도 소리가 비어버림
-//  (2) 서버가 보내는 작은 PCM 조각을 하나씩 따로 재생해 이음새가 들림
-//  (3) 재생 경로에 await가 있어 동시 호출 시 재생 시점 계산이 뒤엉킴
-//  (4) 사용자 조작 밖에서 AudioContext를 만들어 iOS가 정지 상태로 둠
-// ══════════════════════════════════════
-let playCtx = null;
-let playHead = 0;        // 다음 소리를 배치할 시각
-let pendBufs = [];       // 병합 대기 조각
-let pendLen = 0;
-let flushT = null;
-const MIN_CHUNK = 0.12;  // 120ms 이상 모아서 한 번에 재생
-// 지연 타이머(아래 flushT)가 너무 짧으면, 실제 오디오 조각 도착 간격보다
-// 먼저 발동해 아직 덜 모인 짧은 조각을 성급하게 내보내게 된다. 그러면
-// 이어서 도착한 다음 조각과의 이음새에서 lookahead 재조정이 반복되며
-// 간격이 생기고, 그 결과 "몇 단어 재생 후 한 단어가 스킵되는" 것처럼
-// 들린다. 실제 청크 도착 간격보다 확실히 넉넉한 값으로 늘린다.
-const FLUSH_DELAY_MS = 180;
-const MAX_AHEAD = 1.5;   // 실시간보다 이만큼 앞서면 밀린 소리를 버리고 다시 맞춘다
-
-// 대화 모드는 세션이 둘(ws: 한국어→외국어, ws2: 외국어→한국어)인데
-// 스피커는 하나다. 한 번에 한 방향만 스피커를 쓰게 해서
-// 두 목소리가 한 버퍼에 섞이거나 동시에 겹치는 것을 막는다.
-let speakerOwner = null;      // 'ws' | 'ws2'
-let speakerIdleT = null;
-let speakerOwnedSince = 0;    // 지금 방향이 스피커를 잡은 시각(연속 점유 시간 측정용)
-const OWNER_IDLE_MS = 700;    // 이 시간 동안 새 소리가 없으면 스피커를 놓는다
-// 오디오가 700ms보다 촘촘히 계속 들어오면 위 idle 타이머가 절대 발동하지 않을 수 있다.
-// 그런 경우에도 한쪽이 스피커를 영원히 붙잡지 않도록 연속 점유 시간 자체에 상한을 둔다.
-const OWNER_HARD_CAP_MS = 8000;
-// 8초 하드캡은 "같은 방향이 계속 말할 때"만 체크되다 보니, 한쪽이 뜸하지
-// 않게 계속 말하면 실질적으로 반대 방향은 영원히 기회를 못 받았다(기아 상태).
-// 이제 이보다 훨씬 짧은 시간만 잡고 있어도 새로 도착한 반대 방향에 양보한다.
-const OWNER_TAKEOVER_MS = 1200;
-let gateStartAt = 0;          // 마이크 차단이 시작된 시각(연속 차단 시간 측정용)
-const GATE_HARD_CAP_MS = 6000;
-
-// 스피커가 통역 음성을 내는 동안에는 마이크 전송을 멈춘다.
-// 그러지 않으면 스피커 소리가 마이크로 되들어가 끝없이 되번역된다.
-let micMuteUntil = 0;
-const MIC_GATE_MAX_MS = 2000;   // 어떤 경우에도 이 시간을 넘겨 막지 않는다(정지 방지)
-let lastMicSendAt = 0;          // 마지막으로 마이크를 보낸 시각 — 정지 감지용
-// 공식 문서: 오디오 스트림이 1초 넘게 끊기면 audioStreamEnd를 보내 서버가
-// 캐시된 오디오를 플러시하고 턴을 마무리하게 해야 한다. 지금까지 이 신호를
-// 전혀 보내지 않아, 서버가 계속 발화가 이어지는 것으로 보고 턴을 끝내지
-// 못했을 가능성이 크다(turnComplete가 한 번도 온 적이 없었던 것과 일치).
-let audioStreamEndSent = true;
-// echoTargetLanguage:false로 설정해도, 입력이 이미 그 방향의 타겟 언어와
-// 같을 때 모델이 가끔 예외적으로 음성을 만들어내는 경우가 관찰됐다
-// (예: 한국어를 말했는데 ws2가 간헐적으로 한국어 소리를 냄).
-// 방향별 타겟 언어와 최근 감지된 입력 언어를 기록해, 서로 같을 때는
-// 그 방향의 오디오 재생 자체를 걸러낸다(텍스트는 그대로 둠).
-let wsTargetLang = '';
-const ws2TargetLang = 'ko';
-let wsInputLang = '';
-let ws2InputLang = '';  // 세션 시작 직후는 아직 보낸 적도 없고 보낼 이유도 없는 상태
-let lastServerMsgAt = 0;        // 마지막으로 서버 응답을 받은 시각
-
-// releaseSpeaker()는 문장 사이 짧은 침묵(700ms)마다도 호출되는데, 그때 연속-점유
-// 하드캡(gateStartAt)이 함께 리셋돼버린다. 문장 여러 개가 짧은 틈을 두고 이어지면
-// 하드캡이 매번 새로 시작해 사실상 무제한으로 막히는 구멍이 있었다.
-// 이 값은 그런 리셋과 무관하게 "마이크를 실제로 보낸 마지막 시점"만 기준으로 삼는다.
-let micBlockedSince = 0;
-const MIC_BLOCK_ABS_CAP_MS = 5000;  // 이 시간 동안 한 번도 못 보냈으면 무조건 열어준다
-
-function lookahead(){ return convMode ? 0.38 : 0.22; }
-
-// 실증 결과: ws2 없이(경쟁 상대 없이) 마이크 차단 로직만 꺼도 대화가
-// 몇 분씩 끊김 없이 안정적으로 이어졌다. 반대로 지금까지 대화 모드가
-// 계속 멎었던 건 음향 피드백이 아니라, 이 마이크 차단 로직 자체가
-// 모델의 턴 처리를 방해하고 있었기 때문으로 보인다.
-// → 마이크는 이제 ws2가 있든 없든 항상 끊김 없이 스트리밍한다.
-//   스피커에 무엇을 낼지(재생 쪽)만 아래 speakerOwner로 조율하고,
-//   마이크 전송(서버로 보내는 쪽)은 더 이상 막지 않는다.
-function needsHalfDuplex(){ return false; }
-
-// 반드시 사용자 조작(시작/음소거 해제) 시점에 호출 — iOS 자동재생 제한 통과용
-function initPlayback(){
-  // 재생 컨텍스트를 여는 순간이 iOS가 마이크 컨텍스트를 정지시키는 가장 흔한 시점이다.
-  // 여기서 마이크 쪽도 같이 깨워 충돌을 최소화한다.
-  try{ if(actx && actx.state!=='running' && actx.state!=='closed') actx.resume(); }catch(_){}
-  try{
-    if(!playCtx || playCtx.state==='closed'){
-      // 샘플레이트를 강제하지 않는다. iOS는 하드웨어 값을 쓰기 때문에
-      // 24kHz를 강요하면 컨텍스트 생성이 실패하거나 재생이 거칠어진다.
-      // 버퍼 자체에 24kHz를 실어 보내면 브라우저가 알아서 변환한다.
-      playCtx = new (window.AudioContext||window.webkitAudioContext)();
-    }
-    if(playCtx.state==='suspended') playCtx.resume();
-    // 무음 1샘플을 재생해 오디오 출력을 열어둔다
-    const b=playCtx.createBuffer(1,1,playCtx.sampleRate);
-    const s=playCtx.createBufferSource(); s.buffer=b;
-    s.connect(playCtx.destination); s.start(0);
-  }catch(_){}
-  playHead=0; pendBufs=[]; pendLen=0;
-  speakerOwner=null; micMuteUntil=0;
-  if(speakerIdleT){ clearTimeout(speakerIdleT); speakerIdleT=null; }
-}
-
-function releaseSpeaker(){
-  flushAudio();
-  speakerOwner=null;
-  speakerIdleT=null;
-  speakerOwnedSince=0;
-  gateStartAt=0;   // 스피커를 놓으면 마이크 차단도 더 이상 연장하지 않는다
-}
-
-// 서버가 이 방향의 응답이 끝났다고 명시적으로 알려온 경우(turnComplete).
-// 지금까지는 700ms 침묵 추정에만 의존했는데, 이 신호가 훨씬 확실하다 —
-// 침묵 추정이 어떤 이유로든 어긋나도(예: 서버가 아주 낮은 볼륨의 오디오를
-// 계속 흘려보내는 경우) 여기서 바로 마이크를 되돌려준다.
-function onTurnComplete(src){
-  if(speakerOwner===src || speakerOwner===null){
-    micMuteUntil = 0;
-    micBlockedSince = 0;
-    releaseSpeaker();
-  }
-}
-
-// source: 'ws'(내 말 → 외국어) 또는 'ws2'(상대 말 → 한국어)
-function playAudioChunk(f32, source){
-  if(muted || !playCtx || playCtx.state==='closed') return;
-  const src = source || 'ws';
-
-  if(speakerOwner === null){
-    speakerOwner = src; speakerOwnedSince = Date.now();
-  } else if(speakerOwner !== src){
-    // 반대 방향의 새 소리가 도착했다. 지금 소유자가 짧게(1.2초 이내) 잡은
-    // 참이면 그대로 마저 재생하게 두고 이번 조각은 버린다.
-    // 하지만 그보다 오래 잡고 있었다면 — 한쪽이 계속 말해서 반대 방향이
-    // 영원히 기회를 못 받는 기아 상태이므로 — 지금 넘긴다.
-    if(speakerOwnedSince && (Date.now()-speakerOwnedSince) > OWNER_TAKEOVER_MS){
-      flushAudio();                         // 기존 소유자의 남은 버퍼는 먼저 내보내고
-      speakerOwner = src; speakerOwnedSince = Date.now();
-    } else {
-      return;
-    }
-  } else if(speakerOwnedSince && (Date.now()-speakerOwnedSince) > OWNER_HARD_CAP_MS){
-    // 같은 방향이 8초 넘게 쉬지 않고 계속 말하는 경우의 최종 안전장치
-    releaseSpeaker();
-    speakerOwner = src; speakerOwnedSince = Date.now();
-  }
-
-  if(speakerIdleT) clearTimeout(speakerIdleT);
-  speakerIdleT = setTimeout(releaseSpeaker, OWNER_IDLE_MS);
-
-  pendBufs.push(f32); pendLen += f32.length;
-  if(pendLen >= PLAYBACK_SR*MIN_CHUNK) flushAudio();
-  else if(!flushT) flushT = setTimeout(flushAudio, FLUSH_DELAY_MS);  // 마지막 조각도 늦지 않게
-}
-
-// 서버 오디오(24kHz)를 재생 컨텍스트의 실제 샘플레이트(보통 48kHz)로 직접 변환한다.
-// 지금까지는 24kHz로 선언한 버퍼를 그대로 재생 컨텍스트에 넘기고 브라우저의
-// 자동 리샘플링에 맡겼는데, iOS Safari에서 이 교차 샘플레이트 재생이 부정확해
-// 여러 버퍼가 이어질수록 오차가 누적되며 "테이프가 늘어지는" 듯한 왜곡이
-// 생기는 것으로 보인다. 데이터를 직접 변환해 버퍼-컨텍스트 샘플레이트를 맞춘다.
-function resamplePCM(f32, fromRate, toRate){
-  if(fromRate === toRate) return f32;
-  const ratio = toRate / fromRate;
-  const outLen = Math.round(f32.length * ratio);
-  const out = new Float32Array(outLen);
-  for(let i=0;i<outLen;i++){
-    const srcPos = i / ratio;
-    const i0 = Math.floor(srcPos);
-    const i1 = Math.min(i0+1, f32.length-1);
-    const frac = srcPos - i0;
-    out[i] = f32[i0] + (f32[i1]-f32[i0])*frac;   // 선형보간
-  }
-  return out;
-}
-
-function flushAudio(){
-  if(flushT){ clearTimeout(flushT); flushT=null; }
-  if(!playCtx || playCtx.state==='closed' || !pendBufs.length) return;
-
-  const total=pendLen;
-  const merged=new Float32Array(total);
-  let off=0; for(const b of pendBufs){ merged.set(b,off); off+=b.length; }
-  pendBufs=[]; pendLen=0;
-
-  // 서버 오디오(PLAYBACK_SR=24kHz)를 컨텍스트의 실제 샘플레이트로 직접 리샘플링한다.
-  // 버퍼를 컨텍스트와 동일한 샘플레이트로 선언해 브라우저의 교차 샘플레이트
-  // 리샘플링(iOS에서 부정확한 사례가 보고됨)을 아예 거치지 않게 한다.
-  const ctxRate = playCtx.sampleRate;
-  const resampled = resamplePCM(merged, PLAYBACK_SR, ctxRate);
-  const buf=playCtx.createBuffer(1, resampled.length, ctxRate);
-  buf.copyToChannel(resampled,0);
-  const src=playCtx.createBufferSource();
-  src.buffer=buf; src.connect(playCtx.destination);
-
-  const now=playCtx.currentTime;
-  const LA=lookahead();
-  // 실시간보다 너무 앞서 예약돼 있으면(피드백이나 폭주) 밀린 소리를 버리고 다시 맞춘다
-  if(playHead - now > MAX_AHEAD) playHead = now + LA;
-  // 재생 시점이 현재를 지나쳤으면 여유를 다시 확보 (끊김 대신 짧은 지연을 택함)
-  if(playHead < now + 0.02) playHead = now + LA;
-
-  try{ src.start(playHead); }catch(_){ return; }
-  playHead += buf.duration;
-
-  // 이 소리가 끝날 때까지 마이크를 막아 스피커→마이크 되돌이를 끊는다.
-  // 단, 오디오가 실제로 재생 중일 때만 막고, 상한을 두어 영구히 막히는 일을 방지한다.
-  if(needsHalfDuplex() && playCtx.state === 'running'){
-    const nowMs = Date.now();
-    if(!gateStartAt) gateStartAt = nowMs;   // 이번 연속 차단 구간의 시작
-    if(nowMs - gateStartAt < GATE_HARD_CAP_MS){
-      const span = Math.min(Math.max(0, playHead-now)*1000 + 220, MIC_GATE_MAX_MS);
-      const until = nowMs + span;
-      if(until > micMuteUntil) micMuteUntil = until;
-    }
-    // 연속 차단이 6초를 넘으면 더 이상 연장하지 않는다 —
-    // 재생이 계속되더라도 마이크는 곧 풀려 정지 상태를 벗어난다.
-  }
-}
-
-function stopPlayback(){
-  if(flushT){ clearTimeout(flushT); flushT=null; }
-  if(speakerIdleT){ clearTimeout(speakerIdleT); speakerIdleT=null; }
-  pendBufs=[]; pendLen=0; playHead=0;
-  speakerOwner=null; micMuteUntil=0;
-  speakerOwnedSince=0; gateStartAt=0;
-  if(playCtx){ try{ playCtx.close(); }catch(_){} playCtx=null; }
-}
-
-// ── 설정 저장/불러오기 ──
 function saveSettings(){
   const key = document.getElementById('apiKey').value.trim();
   if(key) localStorage.setItem('gtl_apikey', key);
@@ -1449,20 +1041,8 @@ function loadSettings(){
     if(s && val && [...s.options].some(o=>o.value===val)) s.value=val;
   };
   setSel('meetingLang', localStorage.getItem('gtl_meetingLang'));
-  setSel('convLang',    localStorage.getItem('gtl_convLang'));
   const fs = parseInt(localStorage.getItem('gtl_fontsize')||'15',10);
   if(fs>=11 && fs<=26) applyFont(fs);
-  // 라이트 버전은 회의 모드 전용이라 모드 전환이 없다
-  // 대화 모드는 음성 통역이 기능의 핵심이므로, 어떤 저장값이 있든 항상 켠 채로 시작한다.
-  // 여러 차례 "음소거 저장값이 덮어써서 소리가 안 난다"는 문제가 반복돼,
-  // 아예 대화 모드에서는 저장된 음소거 설정을 참조하지 않도록 단순화했다.
-  // 회의 모드는 지금까지처럼 사용자가 저장한 선호를 그대로 복원한다.
-  if(!convMode){
-    const mv = localStorage.getItem('gtl_muted');
-    if(mv!==null) setMute(mv==='1');
-  } else {
-    setMute(false);
-  }
   const rv = localStorage.getItem('gtl_refine');
   if(rv==='0'){ refineOn=false; const rb=document.getElementById('refineBtn');
     if(rb){ rb.classList.remove('on'); rb.textContent='✨ 다듬기 끔'; } }
@@ -1505,24 +1085,14 @@ function updateCtrlSession(){
 }
 
 function updateLabels(){
-  if(convMode){
-    const fl = document.getElementById('convLang')?.value || 'en';
-    const fname = langName[fl]||fl;
-    document.getElementById('srcLabel').textContent = '원문 (자동감지)';
-    document.getElementById('dstLabel').textContent = '번역 (한국어↔'+fname+')';
-    const banner = document.getElementById('convBanner');
-    if(banner) banner.textContent = '🗣 대화 모드 — 한국어 ↔ '+fname+' 음성 통역 중';
-  } else {
-    const val = document.getElementById('meetingLang')?.value || 'ko|auto';
-    const[dst,src]=val.split('|');
-    const srcLabel = src==='auto' ? '자동감지 (다국어)' : (langName[src]||src);
-    document.getElementById('srcLabel').textContent='원문 ('+srcLabel+')';
-    document.getElementById('dstLabel').textContent='번역 ('+(langName[dst]||dst)+')';
-  }
+  const val = document.getElementById('meetingLang')?.value || 'ko|auto';
+  const[dst,src]=val.split('|');
+  const srcLabel = src==='auto' ? '자동감지 (다국어)' : (langName[src]||src);
+  document.getElementById('srcLabel').textContent='원문 ('+srcLabel+')';
+  document.getElementById('dstLabel').textContent='번역 ('+(langName[dst]||dst)+')';
   updateCtrlSession();
 }
 document.getElementById('meetingLang')?.addEventListener('change', ()=>{ saveSettings(); updateLabels(); });
-document.getElementById('convLang')?.addEventListener('change', ()=>{ saveSettings(); updateLabels(); });
 updateLabels();
 loadSettings();
 
@@ -1533,8 +1103,6 @@ async function copyCol(boxId,btnId){
   setTimeout(()=>{btn.textContent='복사';btn.classList.remove('copied');},1500);
 }
 
-function f32i16(buf){const o=new Int16Array(buf.length);for(let i=0;i<buf.length;i++){const s=Math.max(-1,Math.min(1,buf[i]));o[i]=s<0?s*0x8000:s*0x7FFF;}return o;}
-function b64(i16){const b=new Uint8Array(i16.buffer);let s='';for(let i=0;i<b.length;i++)s+=String.fromCharCode(b[i]);return btoa(s);}
 
 // ══════════════════════════════════════════════
 // 배치 처리 아키텍처 — WebSocket Live 세션 대신 오디오를 문장 경계 근처에서
@@ -1758,6 +1326,89 @@ function startMicProcessorBatch(){
 let currentKey = '';
 let currentTargetLang = '';
 let currentSessionName = '';
+
+// ── 경과시간·자동저장 (v5.1 기준 복원, 대화모드·재생 관련 참조는 제거) ──
+let elapsedInt=null, startedAt=0;
+let longNoticeShown=false;
+let silentNoticeShown=false;
+let lastServerMsgAt=0;
+let autoSaveInt=null;
+const AUTOSAVE_MS = 5*60*1000;   // 5분
+
+function startAutoSave(){
+  clearInterval(autoSaveInt);
+  autoSaveInt=setInterval(()=>{
+    if(!currentSession) return;
+    if(!currentSession.src.length && !currentSession.dst.length) return;
+    // durationSec 본값은 중지 시에만 확정한다. 자동 저장에는 지금까지의
+    // 진행 시간을 실은 스냅샷만 저장해, 다음 자동 저장 때 중복 합산되지 않게 한다.
+    const snapshot = {...currentSession, durationSec: getCurrentDurationSec(currentSession)};
+    if(upsertSession(snapshot)){
+      showSaveHint('자동 저장 ' + new Date().toTimeString().slice(0,5));
+      checkStorage();
+    }
+  }, AUTOSAVE_MS);
+}
+function stopAutoSave(){ clearInterval(autoSaveInt); autoSaveInt=null; }
+
+function showSaveHint(text){
+  const el=document.getElementById('saveHint');
+  if(!el) return;
+  el.textContent='💾 '+text;
+  el.style.opacity='1';
+  setTimeout(()=>{ el.style.opacity='0.35'; }, 2500);
+}
+function startElapsed(){
+  startedAt=Date.now();
+  clearInterval(elapsedInt);
+  elapsedInt=setInterval(()=>{
+    const s=Math.floor((Date.now()-startedAt)/1000);
+    const mm=String(Math.floor(s/60)%60).padStart(2,'0'), ss=String(s%60).padStart(2,'0');
+    const el=document.getElementById('elapsed');
+    if(el) el.textContent=(s>=3600? Math.floor(s/3600)+':' : '')+mm+':'+ss;
+    // 마이크 컨텍스트가 정지 상태로 빠졌는지 매초 확인해 즉시 되살린다.
+    // iOS는 백그라운드 전환 등으로 컨텍스트를 조용히 정지시키는 경우가 있는데,
+    // 이 감시가 없으면 화면엔 아무 표시 없이 마이크만 영구히 죽는다.
+    if(actx && actx.state==='suspended'){
+      try{ actx.resume(); }catch(_){}
+      showNotice('마이크가 일시 정지되어 자동으로 재개했습니다. 계속 안 되면 중지 후 다시 시작해 주세요.', 'warn');
+    }
+
+    // 배치 API 응답이 오래 끊긴 경우를 알려준다(청크가 계속 안 들어오는 상태).
+    if(lastServerMsgAt && (Date.now()-lastServerMsgAt) > 15000 && !silentNoticeShown){
+      silentNoticeShown = true;
+      showNotice('15초 이상 응답이 없습니다. 소리가 마이크에 닿는지 확인하고, 계속되면 중지 후 다시 시작해 주세요.', 'warn');
+    }
+    if(lastServerMsgAt && (Date.now()-lastServerMsgAt) < 5000 && silentNoticeShown){
+      silentNoticeShown = false;   // 응답이 돌아오면 안내를 내린다
+      hideNotice();
+    }
+
+    // 2시간을 넘기면 세션을 나누도록 한 번 안내한다
+    if(s>=7200 && !longNoticeShown){
+      longNoticeShown=true;
+      showNotice('2시간이 지났습니다. 중지 후 새 세션으로 나누면 저장 실패와 성능 저하를 예방할 수 있습니다.', 'warn');
+    }
+  },1000);
+}
+function stopElapsed(){ clearInterval(elapsedInt); elapsedInt=null; }
+
+// 세션의 누적 소요시간(초). 진행 중이면 이번 구간까지 더해 계산한다.
+// currentSession.durationSec 자체는 건드리지 않아 중복 합산을 막는다.
+function getCurrentDurationSec(session){
+  let base = (session && session.durationSec) || 0;
+  if(session===currentSession && elapsedInt && startedAt){
+    base += Math.floor((Date.now()-startedAt)/1000);
+  }
+  return base;
+}
+
+// 초 → "1시간 12분" / "12분" 형태로 표시. 1분 미만은 표시하지 않는다(의미가 적음).
+function formatDuration(sec){
+  if(!sec || sec<60) return '';
+  const h=Math.floor(sec/3600), m=Math.floor((sec%3600)/60);
+  return h>0 ? (h+'시간 '+m+'분') : (m+'분');
+}
 
 async function startTranslation(){
   showErr('');
