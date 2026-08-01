@@ -2,6 +2,10 @@
 <!DOCTYPE html>
 <!--
   Gemini Live Translate
+  v4.5  2026.08.01  실증 확인(2분+ 대화 성공): 영어→한국어 방향 텍스트는 나오는데
+                    음성만 안 나오는 문제 수정. 한쪽이 계속 말하면 반대 방향
+                    오디오가 무조건 버려지던 스피커 소유권 기아 현상을, 1.2초
+                    이상 잡고 있으면 상대에게 양보하도록 고쳐 해결
   v4.4  2026.08.01  실증 확인: 마이크 차단을 끈 단독 세션이 2분 40초간 끊김 없이
                     안정적으로 작동함(지금까지 최초의 정상 사례). 마이크 차단이
                     피드백 방지가 아니라 모델의 턴 처리 자체를 방해하고 있었던
@@ -336,7 +340,7 @@
       <label for="soloWsOnly" style="font-size:11px;color:#f0c674;">진단: ws2 끄고 단독 세션만 테스트</label>
     </div>
     <a class="manual-link" href="gemini_translate_manual.pdf" target="_blank" rel="noopener" title="사용 매뉴얼 (PDF)">📖 사용법</a>
-    <div class="version-tag">v4.4 · 2026.08.01</div>
+    <div class="version-tag">v4.5 · 2026.08.01</div>
   </div>
 
   <!-- 대화 모드 안내 배너 -->
@@ -1195,6 +1199,10 @@ const OWNER_IDLE_MS = 700;    // 이 시간 동안 새 소리가 없으면 스�
 // 오디오가 700ms보다 촘촘히 계속 들어오면 위 idle 타이머가 절대 발동하지 않을 수 있다.
 // 그런 경우에도 한쪽이 스피커를 영원히 붙잡지 않도록 연속 점유 시간 자체에 상한을 둔다.
 const OWNER_HARD_CAP_MS = 8000;
+// 8초 하드캡은 "같은 방향이 계속 말할 때"만 체크되다 보니, 한쪽이 뜸하지
+// 않게 계속 말하면 실질적으로 반대 방향은 영원히 기회를 못 받았다(기아 상태).
+// 이제 이보다 훨씬 짧은 시간만 잡고 있어도 새로 도착한 반대 방향에 양보한다.
+const OWNER_TAKEOVER_MS = 1200;
 let gateStartAt = 0;          // 마이크 차단이 시작된 시각(연속 차단 시간 측정용)
 const GATE_HARD_CAP_MS = 6000;
 
@@ -1276,16 +1284,24 @@ function playAudioChunk(f32, source){
   if(muted || !playCtx || playCtx.state==='closed') return;
   const src = source || 'ws';
 
-  // 오디오가 idle 타이머(700ms)보다 촘촘히 계속 들어와 한쪽이 스피커를
-  // 지나치게 오래 붙잡고 있으면, 새 조각이 도착한 이 시점에 강제로 넘긴다.
-  if(speakerOwner!=null && speakerOwner===src && speakerOwnedSince && (Date.now()-speakerOwnedSince) > OWNER_HARD_CAP_MS){
+  if(speakerOwner === null){
+    speakerOwner = src; speakerOwnedSince = Date.now();
+  } else if(speakerOwner !== src){
+    // 반대 방향의 새 소리가 도착했다. 지금 소유자가 짧게(1.2초 이내) 잡은
+    // 참이면 그대로 마저 재생하게 두고 이번 조각은 버린다.
+    // 하지만 그보다 오래 잡고 있었다면 — 한쪽이 계속 말해서 반대 방향이
+    // 영원히 기회를 못 받는 기아 상태이므로 — 지금 넘긴다.
+    if(speakerOwnedSince && (Date.now()-speakerOwnedSince) > OWNER_TAKEOVER_MS){
+      flushAudio();                         // 기존 소유자의 남은 버퍼는 먼저 내보내고
+      speakerOwner = src; speakerOwnedSince = Date.now();
+    } else {
+      return;
+    }
+  } else if(speakerOwnedSince && (Date.now()-speakerOwnedSince) > OWNER_HARD_CAP_MS){
+    // 같은 방향이 8초 넘게 쉬지 않고 계속 말하는 경우의 최종 안전장치
     releaseSpeaker();
+    speakerOwner = src; speakerOwnedSince = Date.now();
   }
-
-  // 한 방향이 말하는 중이면 다른 방향의 소리는 버린다.
-  // 겹쳐 재생하거나 한 버퍼에 섞으면 두 목소리가 뒤엉켜 들린다.
-  if(speakerOwner === null){ speakerOwner = src; speakerOwnedSince = Date.now(); }
-  else if(speakerOwner !== src) return;
 
   if(speakerIdleT) clearTimeout(speakerIdleT);
   speakerIdleT = setTimeout(releaseSpeaker, OWNER_IDLE_MS);
