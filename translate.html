@@ -2,6 +2,10 @@
 <!DOCTYPE html>
 <!--
   Gemini Live Translate
+  v5.0  2026.08.01  실증 확인(목소리 일관성 해결, 단어 누락 대폭 감소). 남은 문제인
+                    "영→한 텍스트에 영어·한국어가 섞여 나오는" 현상 수정:
+                    오디오에만 적용했던 입력언어 일치 필터(v4.7)를 텍스트
+                    출력에도 동일하게 적용
   v4.9  2026.08.01  실증 확인(7분 안정, 오디오 끊김 완전 해소). "같은 화자인데
                     문장마다 성우가 바뀐다" 문제 수정: speechConfig로 음성을
                     방향별로 고정(ws=Puck, ws2=Kore) — 지금까지 미지정 상태라
@@ -358,7 +362,7 @@
       <label for="soloWsOnly" style="font-size:11px;color:#f0c674;">진단: ws2 끄고 단독 세션만 테스트</label>
     </div>
     <a class="manual-link" href="gemini_translate_manual.pdf" target="_blank" rel="noopener" title="사용 매뉴얼 (PDF)">📖 사용법</a>
-    <div class="version-tag">v4.9 · 2026.08.01</div>
+    <div class="version-tag">v5.0 · 2026.08.01</div>
   </div>
 
   <!-- 대화 모드 안내 배너 -->
@@ -1565,21 +1569,20 @@ async function parse(e){
       if(info.lang) wsInputLang = info.lang;
       appendText('srcBox',inTxt,'',srcArr,info.seg,info.lang);
     }
-    if(sc.outputTranscription?.text)
+    // 오디오와 같은 기준으로 텍스트도 걸러낸다
+    const wsTextOk = !wsTargetLang || wsInputLang!==wsTargetLang;
+    if(sc.outputTranscription?.text && wsTextOk)
       appendDstText(sc.outputTranscription.text,outCls,dstArr,msgSeg);
 
     if(sc.modelTurn?.parts){
       for(const p of sc.modelTurn.parts){
         if(p.inlineData?.data){
           rxCount.ws.audio++;
-          // 입력이 이미 ws의 타겟 언어와 같으면(echo=false인데도 간헐적으로
-          // 나오는 잘못된 음성일 가능성) 재생하지 않고 걸러낸다.
-          const wsAudioOk = !wsTargetLang || wsInputLang!==wsTargetLang;
-          if(!muted && wsAudioOk && p.inlineData.mimeType?.startsWith('audio/')){
+          if(!muted && wsTextOk && p.inlineData.mimeType?.startsWith('audio/')){
             playAudioChunk(base64ToFloat32(p.inlineData.data, PLAYBACK_SR), 'ws');
           }
         }
-        if(p.text) appendDstText(p.text,outCls,dstArr,msgSeg);
+        if(p.text && wsTextOk) appendDstText(p.text,outCls,dstArr,msgSeg);
       }
     }
 
@@ -1791,18 +1794,18 @@ async function parseConvReverse(e){
       if(lang2) ws2InputLang = lang2;
     }
 
-    if(sc.outputTranscription?.text) appendDstText(sc.outputTranscription.text,'ko',currentSession?.dst||null);
+    // 오디오와 같은 이유로 텍스트도 걸러낸다 — 입력이 이미 한국어(ws2의
+    // 타겟 언어)면 echo=false에서도 간혹 뒤섞인 텍스트가 나오는 것으로 보인다.
+    const ws2TextOk = ws2InputLang!==ws2TargetLang;
+    if(sc.outputTranscription?.text && ws2TextOk) appendDstText(sc.outputTranscription.text,'ko',currentSession?.dst||null);
     if(sc.modelTurn?.parts){
       for(const p of sc.modelTurn.parts){
         if(p.inlineData?.data){
           rxCount.ws2.audio++;
-          // 입력이 이미 한국어(ws2의 타겟)면 echo=false에서도 간헐적으로
-          // 새 나오는 음성을 걸러낸다 — 한국어 발화 중 한국어 오디오가
-          // 섞여 나오는 증상의 원인으로 보인다.
-          const ws2AudioOk = ws2InputLang!==ws2TargetLang;
-          if(!muted && ws2AudioOk && p.inlineData.mimeType?.startsWith('audio/'))
+          if(!muted && ws2TextOk && p.inlineData.mimeType?.startsWith('audio/'))
             playAudioChunk(base64ToFloat32(p.inlineData.data, PLAYBACK_SR), 'ws2');
         }
+        if(p.text && ws2TextOk) appendDstText(p.text,'ko',currentSession?.dst||null);
       }
     }
   }catch(err){
