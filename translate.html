@@ -2,6 +2,11 @@
 <!DOCTYPE html>
 <!--
   Gemini Live Translate
+  v4.6  2026.08.01  영→한/한→영 오디오 출력이 정상 확인됨(2분 26초 안정,
+                    양방향 모두 음성 재생). 남은 문제인 "몇 단어 재생 후 한
+                    단어 스킵" 현상 수정: 부분 청크를 성급하게 내보내던 60ms
+                    지연 타이머를 180ms로 늘리고, 대화 모드 재생 여유(lookahead)를
+                    0.30→0.38초로 확대해 이음새 간격을 줄임
   v4.5  2026.08.01  실증 확인(2분+ 대화 성공): 영어→한국어 방향 텍스트는 나오는데
                     음성만 안 나오는 문제 수정. 한쪽이 계속 말하면 반대 방향
                     오디오가 무조건 버려지던 스피커 소유권 기아 현상을, 1.2초
@@ -340,7 +345,7 @@
       <label for="soloWsOnly" style="font-size:11px;color:#f0c674;">진단: ws2 끄고 단독 세션만 테스트</label>
     </div>
     <a class="manual-link" href="gemini_translate_manual.pdf" target="_blank" rel="noopener" title="사용 매뉴얼 (PDF)">📖 사용법</a>
-    <div class="version-tag">v4.5 · 2026.08.01</div>
+    <div class="version-tag">v4.6 · 2026.08.01</div>
   </div>
 
   <!-- 대화 모드 안내 배너 -->
@@ -1187,6 +1192,12 @@ let pendBufs = [];       // 병합 대기 조각
 let pendLen = 0;
 let flushT = null;
 const MIN_CHUNK = 0.12;  // 120ms 이상 모아서 한 번에 재생
+// 지연 타이머(아래 flushT)가 너무 짧으면, 실제 오디오 조각 도착 간격보다
+// 먼저 발동해 아직 덜 모인 짧은 조각을 성급하게 내보내게 된다. 그러면
+// 이어서 도착한 다음 조각과의 이음새에서 lookahead 재조정이 반복되며
+// 간격이 생기고, 그 결과 "몇 단어 재생 후 한 단어가 스킵되는" 것처럼
+// 들린다. 실제 청크 도착 간격보다 확실히 넉넉한 값으로 늘린다.
+const FLUSH_DELAY_MS = 180;
 const MAX_AHEAD = 1.5;   // 실시간보다 이만큼 앞서면 밀린 소리를 버리고 다시 맞춘다
 
 // 대화 모드는 세션이 둘(ws: 한국어→외국어, ws2: 외국어→한국어)인데
@@ -1225,7 +1236,7 @@ let lastServerMsgAt = 0;        // 마지막으로 서버 응답을 받은 시�
 let micBlockedSince = 0;
 const MIC_BLOCK_ABS_CAP_MS = 5000;  // 이 시간 동안 한 번도 못 보냈으면 무조건 열어준다
 
-function lookahead(){ return convMode ? 0.30 : 0.22; }
+function lookahead(){ return convMode ? 0.38 : 0.22; }
 
 // 실증 결과: ws2 없이(경쟁 상대 없이) 마이크 차단 로직만 꺼도 대화가
 // 몇 분씩 끊김 없이 안정적으로 이어졌다. 반대로 지금까지 대화 모드가
@@ -1308,7 +1319,7 @@ function playAudioChunk(f32, source){
 
   pendBufs.push(f32); pendLen += f32.length;
   if(pendLen >= PLAYBACK_SR*MIN_CHUNK) flushAudio();
-  else if(!flushT) flushT = setTimeout(flushAudio, 60);  // 마지막 조각도 늦지 않게
+  else if(!flushT) flushT = setTimeout(flushAudio, FLUSH_DELAY_MS);  // 마지막 조각도 늦지 않게
 }
 
 // 서버 오디오(24kHz)를 재생 컨텍스트의 실제 샘플레이트(보통 48kHz)로 직접 변환한다.
