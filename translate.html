@@ -2,6 +2,11 @@
 <!DOCTYPE html>
 <!--
   Gemini Live Translate
+  v4.4  2026.08.01  실증 확인: 마이크 차단을 끈 단독 세션이 2분 40초간 끊김 없이
+                    안정적으로 작동함(지금까지 최초의 정상 사례). 마이크 차단이
+                    피드백 방지가 아니라 모델의 턴 처리 자체를 방해하고 있었던
+                    것으로 결론. 이제 ws2 존재 여부와 무관하게 마이크는 항상
+                    끊김 없이 스트리밍하고, 스피커 출력(재생)만 조율한다
   v4.3  2026.08.01  결정적 발견: 진단용 "ws2 끄고 단독 테스트"에서도 증상이 동일해
                     두 세션 동시 개설 가설을 완전히 기각. 원인은 대화 모드 전용
                     마이크 차단·audioStreamEnd 로직이 convMode 값만으로 켜져 있어,
@@ -331,7 +336,7 @@
       <label for="soloWsOnly" style="font-size:11px;color:#f0c674;">진단: ws2 끄고 단독 세션만 테스트</label>
     </div>
     <a class="manual-link" href="gemini_translate_manual.pdf" target="_blank" rel="noopener" title="사용 매뉴얼 (PDF)">📖 사용법</a>
-    <div class="version-tag">v4.3 · 2026.08.01</div>
+    <div class="version-tag">v4.4 · 2026.08.01</div>
   </div>
 
   <!-- 대화 모드 안내 배너 -->
@@ -1214,10 +1219,14 @@ const MIC_BLOCK_ABS_CAP_MS = 5000;  // 이 시간 동안 한 번도 못 보냈�
 
 function lookahead(){ return convMode ? 0.30 : 0.22; }
 
-// 대화 모드라도 ws2(반대 방향)가 실제로 열려 있지 않으면 경쟁할 상대가 없다.
-// 이 경우 마이크를 껐다 켰다 하는 제어 자체가 불필요한 개입이며, 오히려
-// 모델의 턴 처리를 방해할 수 있다(회의 모드처럼 끊김 없이 스트리밍해야 정상).
-function needsHalfDuplex(){ return convMode && ws2!=null; }
+// 실증 결과: ws2 없이(경쟁 상대 없이) 마이크 차단 로직만 꺼도 대화가
+// 몇 분씩 끊김 없이 안정적으로 이어졌다. 반대로 지금까지 대화 모드가
+// 계속 멎었던 건 음향 피드백이 아니라, 이 마이크 차단 로직 자체가
+// 모델의 턴 처리를 방해하고 있었기 때문으로 보인다.
+// → 마이크는 이제 ws2가 있든 없든 항상 끊김 없이 스트리밍한다.
+//   스피커에 무엇을 낼지(재생 쪽)만 아래 speakerOwner로 조율하고,
+//   마이크 전송(서버로 보내는 쪽)은 더 이상 막지 않는다.
+function needsHalfDuplex(){ return false; }
 
 // 반드시 사용자 조작(시작/음소거 해제) 시점에 호출 — iOS 자동재생 제한 통과용
 function initPlayback(){
