@@ -2,6 +2,10 @@
 <!DOCTYPE html>
 <!--
   Gemini Live Translate
+  v5.1  2026.08.01  실증 확인(API 키 1개만으로 정상 작동 확인됨) — 대화 모드 완성
+                    단계 진입. 디버깅용 UI 정리: 두 번째 API Key 입력창,
+                    "ws2 끄고 단독 테스트" 진단 체크박스 제거. 상태 표시줄을
+                    연결 상태(✓/✕)와 오류 표시만 남기고 간소화
   v5.0  2026.08.01  실증 확인(목소리 일관성 해결, 단어 누락 대폭 감소). 남은 문제인
                     "영→한 텍스트에 영어·한국어가 섞여 나오는" 현상 수정:
                     오디오에만 적용했던 입력언어 일치 필터(v4.7)를 텍스트
@@ -352,17 +356,8 @@
         <option value="ja">일본어</option>
       </select>
     </div>
-    <div class="sg hidden" id="sgApiKey2">
-      <label>상대방 방향 API Key (선택)</label>
-      <input type="password" id="apiKey2" placeholder="비워두면 위 키 재사용" autocomplete="off" />
-      <div style="font-size:10px;color:#555;margin-top:3px;">동시 세션 제한이 원인인지 확인하려면 다른 키를 넣어보세요</div>
-    </div>
-    <div class="sg hidden" id="sgSoloTest" style="flex-direction:row;align-items:center;gap:6px;">
-      <input type="checkbox" id="soloWsOnly" style="width:auto;" />
-      <label for="soloWsOnly" style="font-size:11px;color:#f0c674;">진단: ws2 끄고 단독 세션만 테스트</label>
-    </div>
     <a class="manual-link" href="gemini_translate_manual.pdf" target="_blank" rel="noopener" title="사용 매뉴얼 (PDF)">📖 사용법</a>
-    <div class="version-tag">v5.0 · 2026.08.01</div>
+    <div class="version-tag">v5.1 · 2026.08.01</div>
   </div>
 
   <!-- 대화 모드 안내 배너 -->
@@ -975,41 +970,21 @@ function hideNotice(){
   noticeActionFn=null;
 }
 
-// ── 대화 모드 진단 ──
-// 두 방향 중 어디가 살아있고 데이터가 흐르는지 보여준다.
-// 문제가 생겼을 때 원인을 눈으로 확인할 수 있어야 한다.
+// ── 대화 모드 상태 표시 ──
+// 디버깅 과정에서 쌓인 세부 진단(수신 카운트, 마이크 게이트 상태 등)은
+// 문제가 해결되어 더 이상 필요 없으므로, 연결 상태와 오류만 남긴다.
 function updateConvDiag(){
   const el = document.getElementById('convDiag');
   if(!el) return;
   if(!convMode){ el.textContent=''; return; }
   const fl = document.getElementById('convLang')?.value || 'en';
   const up = (ws && ws.readyState===1) ? '✓' : '✕';
-  const soloMode = document.getElementById('soloWsOnly')?.checked;
-  const dn = soloMode ? '(끔·진단)' : ((ws2 && ws2.readyState===1) ? '✓' : '✕');
-  const hdTag = needsHalfDuplex() ? '' : ' · 마이크제어:끔(단독)';
-  const blockedSec = micBlockedSince ? Math.floor((Date.now()-micBlockedSince)/1000) : 0;
-  const gated = (Date.now() < micMuteUntil) ? (' · 마이크 대기'+(blockedSec>0?' '+blockedSec+'초':'')) : '';
-  // 오디오 컨텍스트 상태가 running이 아니면 문제의 실제 원인일 가능성이 크므로 눈에 띄게 표시한다
-  const micState = actx ? actx.state : '없음';
-  const micBad = micState !== 'running';
-  const audioTag = micBad ? ' · 🎙'+micState : '';
-  // 지금까지 여러 차례 "음소거 상태를 추측"만 하다가 헛짚은 적이 많아,
-  // 이제는 실제 muted 변수 값을 그대로 화면에 노출해 더 이상 추측하지 않게 한다.
-  const muteTag = ' · 음소거:'+(muted?'ON':'OFF')+(playCtx?'/재생컨텍스트:'+playCtx.state:'/재생컨텍스트:없음');
+  const dn = (ws2 && ws2.readyState===1) ? '✓' : '✕';
   const errRecent = lastParseError && (Date.now()-lastParseErrorAt) < 10000;
-  const errTag = errRecent ? (' · ⚠오류: '+lastParseError) : '';
-  // 서버가 실제로 오디오 데이터를 보내고 있는지 숫자로 직접 확인한다.
-  // 텍스트는 오는데 오디오(audio)가 0이면 클라이언트가 아니라 서버 쪽 문제로 봐야 한다.
-  const rxTag = ' · 수신[텍스트/오디오/턴종료] ws:'+rxCount.ws.text+'/'+rxCount.ws.audio+'/'+rxCount.ws.turn
-              + ' ws2:'+rxCount.ws2.text+'/'+rxCount.ws2.audio+'/'+rxCount.ws2.turn;
-  const key1v = document.getElementById('apiKey')?.value.trim();
-  const key2v = document.getElementById('apiKey2')?.value.trim();
-  const keyTag = ' · 키:'+(key2v && key2v!==key1v ? '분리됨' : '동일');
-  const pauseSec = lastMicSendAt ? Math.floor((Date.now()-lastMicSendAt)/1000) : 0;
-  const streamTag = ' · 마지막전송'+pauseSec+'초전'+(audioStreamEndSent?'(종료신호전송됨)':'');
-  el.textContent = '한국어→'+(langName[fl]||fl)+' '+up+' / '+(langName[fl]||fl)+'→한국어 '+dn+gated+audioTag+muteTag+errTag+rxTag+keyTag+streamTag+hdTag;
-  el.style.color = (micBad || up!=='✓' || dn!=='✓' || muted || errRecent) ? '#f0c674' : '#4a7a4a';
-  if(micBad || muted || errRecent) el.style.color = '#ff453a';
+  const errTag = errRecent ? (' · ⚠ '+lastParseError) : '';
+  el.textContent = '한국어→'+(langName[fl]||fl)+' '+up+' / '+(langName[fl]||fl)+'→한국어 '+dn+errTag;
+  el.style.color = (up!=='✓' || dn!=='✓' || errRecent) ? '#f0c674' : '#4a7a4a';
+  if(errRecent) el.style.color = '#ff453a';
 }
 
 // ── 경과 시간 ──
@@ -1161,16 +1136,12 @@ function toggleMode(){
     sgMeeting.classList.add('hidden');
     sgConv.classList.remove('hidden');
     sgSession.classList.add('hidden');
-    document.getElementById('sgApiKey2')?.classList.remove('hidden');
-    document.getElementById('sgSoloTest')?.classList.remove('hidden');
   } else {
     btn.textContent = '📋 회의'; btn.classList.remove('conv');
     banner.classList.add('hidden');
     sgMeeting.classList.remove('hidden');
     sgConv.classList.add('hidden');
     sgSession.classList.remove('hidden');
-    document.getElementById('sgApiKey2')?.classList.add('hidden');
-    document.getElementById('sgSoloTest')?.classList.add('hidden');
   }
   updateLabels();
   updateConvDiag();
@@ -1433,8 +1404,6 @@ function saveSettings(){
 
 function loadSettings(){
   const key = localStorage.getItem('gt_apikey');
-  const key2 = localStorage.getItem('gt_apikey2');
-  if(key2){ const el2=document.getElementById('apiKey2'); if(el2) el2.value=key2; }
   if(key){ document.getElementById('apiKey').value=key; showKeySaved(true); }
   const setSel=(id,val)=>{
     const s=document.getElementById(id);
@@ -1479,11 +1448,6 @@ function clearApiKey(){
 document.getElementById('apiKey').addEventListener('change', ()=>{
   saveSettings();
   showKeySaved(!!document.getElementById('apiKey').value.trim());
-});
-document.getElementById('apiKey2')?.addEventListener('change', ()=>{
-  const v = document.getElementById('apiKey2').value.trim();
-  if(v) localStorage.setItem('gt_apikey2', v);
-  else localStorage.removeItem('gt_apikey2');
 });
 // targetLang listener moved to meetingLang/convLang
 
@@ -1732,8 +1696,7 @@ function openWS(key, targetLang, isEcho, onMsg, assignTo){
         showNotice('상대방 → 한국어 방향이 끊겼습니다 ('+ev.code+') '+(ev.reason||'')+' — 되살리는 중 ('+ws2Tries+'/'+MAX_RECONNECT+')', 'warn');
         setTimeout(()=>{
           if(!convMode || !currentKey) return;
-          const k2 = (document.getElementById('apiKey2')?.value.trim()) || currentKey;
-          ws2 = openWS(k2, 'ko', false, parseConvReverse, 'ws2');
+          ws2 = openWS(currentKey, 'ko', false, parseConvReverse, 'ws2');
         }, Math.min(1000*ws2Tries, 4000));
       } else if(convMode){
         showNotice('상대방 → 한국어 방향을 복구하지 못했습니다 ('+ev.code+') '+(ev.reason||'')+'. 중지 후 다시 시작해 주세요.', 'danger');
@@ -1922,20 +1885,11 @@ async function startTranslation(){
     // 두 세션을 동시에 열면 서버가 한쪽을 거부하는 경우가 있어 시차를 둔다
     wsTargetLang = fl;
     ws  = openWS(key, fl,   false, parse,            'ws');   // 내 한국어 → 외국어 음성
-    const soloOnly = document.getElementById('soloWsOnly')?.checked;
-    if(soloOnly){
-      showNotice('진단 모드: ws2를 열지 않고 ws(한국어→영어) 세션 하나만 테스트합니다.', 'info');
-    } else {
-      const key2 = (document.getElementById('apiKey2')?.value.trim()) || key;
-      if(key2!==key){
-        showNotice('상대방 방향에 별도 API Key를 사용합니다 (동시 세션 제한 테스트).', 'info');
-      }
-      setTimeout(()=>{
-        if(!convMode || !currentKey || !currentSession || document.getElementById('soloWsOnly')?.checked) return;
-        ws2 = openWS(key2, 'ko', false, parseConvReverse, 'ws2'); // 상대 외국어 → 한국어 음성
-        updateConvDiag();
-      }, 900);
-    }
+    setTimeout(()=>{
+      if(!convMode || !currentKey || !currentSession) return;
+      ws2 = openWS(key, 'ko', false, parseConvReverse, 'ws2'); // 상대 외국어 → 한국어 음성
+      updateConvDiag();
+    }, 900);
   } else {
     ws = openWS(key, targetLang, false, parse, 'ws');
   }
