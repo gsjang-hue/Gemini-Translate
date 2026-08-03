@@ -131,6 +131,9 @@
   v1.0              실시간 번역(텍스트 전용, 음성 출력 없음)
 
 === Light 버전 (실험적 분기, 회의 모드 전용) ===
+  L0.7  2026.08.01  다국어 번역 지원 — 원문/번역 언어를 각각 독립 선택
+                    (한국어·영어·일본어·중국어·스페인어·독일어·프랑스어).
+                    AI 요약도 7개 언어 중 선택 가능
   L0.6  2026.08.01  랜딩 페이지로 가는 홈 링크 추가(설정 패널)
   L0.5  2026.08.01  긴급 수정: L0.4 정리 작업이 실제로 쓰이는 핵심 함수까지
                     같이 지웠던 버그 수정 — toggleSettings·toggleRefine
@@ -384,17 +387,31 @@
     <!-- 회의 모드 설정 -->
     <div class="sg" id="sgMeetingLang">
       <label>회의 언어</label>
-      <select id="meetingLang">
-        <option value="ko|auto">🌐 자동감지 → 한국어</option>
-        <option value="ko|en">영어 → 한국어</option>
-        <option value="ko|zh">중국어 → 한국어</option>
-        <option value="ko|ja">일본어 → 한국어</option>
+      <select id="srcLang">
+        <option value="auto">🌐 자동감지</option>
+        <option value="ko">한국어</option>
+        <option value="en">영어</option>
+        <option value="ja">일본어</option>
+        <option value="zh">중국어</option>
+        <option value="es">스페인어</option>
+        <option value="de">독일어</option>
+        <option value="fr">프랑스어</option>
+      </select>
+      <label style="margin-top:8px;">번역 언어</label>
+      <select id="dstLang">
+        <option value="ko" selected>한국어</option>
+        <option value="en">영어</option>
+        <option value="ja">일본어</option>
+        <option value="zh">중국어</option>
+        <option value="es">스페인어</option>
+        <option value="de">독일어</option>
+        <option value="fr">프랑스어</option>
       </select>
     </div>
     <a class="manual-link" href="gemini_translate_manual.pdf" target="_blank" rel="noopener" title="사용 매뉴얼 (PDF)">📖 사용법</a>
     <a class="manual-link" href="https://gsjang-hue.github.io/Gemini-Translate/translate.html" title="음성 출력·대화 모드가 있는 기본 버전으로 이동">🔵 기본 버전</a>
     <a class="manual-link" href="https://gsjang-hue.github.io/Gemini-Translate/" title="버전을 비교하고 선택하는 첫 화면으로 이동">🏠 홈</a>
-    <div class="version-tag">Light v0.6 · 2026.08.01<br><span style="font-size:9px;color:#30d158;">API 비용 추정 ≈ $0.15/1hr</span></div>
+    <div class="version-tag">Light v0.7 · 2026.08.01<br><span style="font-size:9px;color:#30d158;">API 비용 추정 ≈ $0.15/1hr</span></div>
   </div>
 
   <!-- 공용 안내 배너 (저장 공간·긴 세션 경고) -->
@@ -445,6 +462,15 @@
       <div class="name" id="curName">세션 없음</div>
       <div class="meta" id="curMeta">번역 탭에서 세션명을 입력하고 시작하세요</div>
       <div class="action-row" id="curActions" style="display:none">
+        <select id="summaryLang" style="font-size:12px; padding:4px 6px; border-radius:6px; background:#1c1c1e; color:#ccc; border:0.5px solid #333;">
+          <option value="ko" selected>한국어 요약</option>
+          <option value="en">영어 요약</option>
+          <option value="ja">일본어 요약</option>
+          <option value="zh">중국어 요약</option>
+          <option value="es">스페인어 요약</option>
+          <option value="de">독일어 요약</option>
+          <option value="fr">프랑스어 요약</option>
+        </select>
         <button class="action-btn btn-summarize" id="summarizeBtn" onclick="summarizeCurrent()">AI 요약 생성</button>
         <button class="action-btn btn-download" onclick="downloadCurrent()">📥 다운로드</button>
         <button class="action-btn btn-save" onclick="saveCurrentSession()">💾 저장</button>
@@ -487,6 +513,15 @@
     </div>
     <div class="modal-body" id="modalBody"></div>
     <div class="modal-actions">
+      <select id="summaryLangModal" style="font-size:12px; padding:4px 6px; border-radius:6px; background:#1c1c1e; color:#ccc; border:0.5px solid #333;">
+        <option value="ko" selected>한국어 요약</option>
+          <option value="en">영어 요약</option>
+          <option value="ja">일본어 요약</option>
+          <option value="zh">중국어 요약</option>
+          <option value="es">스페인어 요약</option>
+          <option value="de">독일어 요약</option>
+          <option value="fr">프랑스어 요약</option>
+      </select>
       <button class="action-btn btn-summarize" id="modalSumBtn" onclick="summarizeModal()">AI 요약</button>
       <button class="copy-btn" id="copyModalSumBtn" onclick="copySummary('modalSummaryArea','copyModalSumBtn')" style="padding:8px 12px;">요약 복사</button>
       <button class="action-btn btn-download" onclick="downloadModal()">📥 다운로드</button>
@@ -505,7 +540,7 @@
 let stream=null, actx=null, proc=null;
 let convMode = false;   // false=회의모드 (라이트 버전은 회의 모드 전용)
 const SR=16000;
-const langName={ko:'한국어',en:'영어',ja:'일본어',zh:'중국어'};
+const langName={ko:'한국어',en:'영어',ja:'일본어',zh:'중국어',es:'스페인어',de:'독일어',fr:'프랑스어'};
 const PARA_GAP=2500;
 
 // 현재 세션 데이터
@@ -1029,10 +1064,10 @@ function toggleRefine(){
 function saveSettings(){
   const key = document.getElementById('apiKey').value.trim();
   if(key) localStorage.setItem('gtl_apikey', key);
-  const m = document.getElementById('meetingLang')?.value;
-  const cv = document.getElementById('convLang')?.value;
-  if(m)  localStorage.setItem('gtl_meetingLang', m);
-  if(cv) localStorage.setItem('gtl_convLang', cv);
+  const sl = document.getElementById('srcLang')?.value;
+  const dl = document.getElementById('dstLang')?.value;
+  if(sl) localStorage.setItem('gtl_srcLang', sl);
+  if(dl) localStorage.setItem('gtl_dstLang', dl);
 }
 
 function loadSettings(){
@@ -1042,7 +1077,8 @@ function loadSettings(){
     const s=document.getElementById(id);
     if(s && val && [...s.options].some(o=>o.value===val)) s.value=val;
   };
-  setSel('meetingLang', localStorage.getItem('gtl_meetingLang'));
+  setSel('srcLang', localStorage.getItem('gtl_srcLang'));
+  setSel('dstLang', localStorage.getItem('gtl_dstLang'));
   const fs = parseInt(localStorage.getItem('gtl_fontsize')||'15',10);
   if(fs>=11 && fs<=26) applyFont(fs);
   const rv = localStorage.getItem('gtl_refine');
@@ -1079,22 +1115,23 @@ function updateCtrlSession(){
     const[dst]=currentSession.lang.split('|');
     el.textContent = currentSession.name + ' · ' + (langName[dst]||dst);
   } else {
-    const val = document.getElementById('meetingLang')?.value || 'ko|auto';
-    const[dst,src]=val.split('|');
+    const src = document.getElementById('srcLang')?.value || 'auto';
+    const dst = document.getElementById('dstLang')?.value || 'ko';
     const srcL = src==='auto'?'자동':langName[src]||src;
     el.textContent = srcL+' → '+(langName[dst]||dst);
   }
 }
 
 function updateLabels(){
-  const val = document.getElementById('meetingLang')?.value || 'ko|auto';
-  const[dst,src]=val.split('|');
+  const src = document.getElementById('srcLang')?.value || 'auto';
+  const dst = document.getElementById('dstLang')?.value || 'ko';
   const srcLabel = src==='auto' ? '자동감지 (다국어)' : (langName[src]||src);
   document.getElementById('srcLabel').textContent='원문 ('+srcLabel+')';
   document.getElementById('dstLabel').textContent='번역 ('+(langName[dst]||dst)+')';
   updateCtrlSession();
 }
-document.getElementById('meetingLang')?.addEventListener('change', ()=>{ saveSettings(); updateLabels(); });
+document.getElementById('srcLang')?.addEventListener('change', ()=>{ saveSettings(); updateLabels(); });
+document.getElementById('dstLang')?.addEventListener('change', ()=>{ saveSettings(); updateLabels(); });
 updateLabels();
 loadSettings();
 
@@ -1417,8 +1454,7 @@ async function startTranslation(){
   const key = document.getElementById('apiKey').value.trim();
   if(!key){ showErr('API Key를 입력해주세요.'); return; }
 
-  const[tl] = document.getElementById('meetingLang').value.split('|');
-  const targetLang = tl;
+  const targetLang = document.getElementById('dstLang').value;
   const sessionName = document.getElementById('sessionName').value.trim() || ('세션 '+dateStr());
   updateLabels();
 
@@ -1463,7 +1499,7 @@ async function startTranslation(){
       name: currentSessionName,
       startTime: new Date().toISOString(),
       startTimeStr: dateStr(),
-      lang: document.getElementById('meetingLang')?.value||'ko|auto',
+      lang: (document.getElementById('dstLang')?.value||'ko')+'|'+(document.getElementById('srcLang')?.value||'auto'),
       src:[], dst:[], summary:'', durationSec:0
     };
     if(!hasExisting){
@@ -1837,7 +1873,7 @@ async function copySummary(areaId, btnId){
 }
 
 // ── AI 요약 ──
-async function summarizeSession(session, areaId, btnId){
+async function summarizeSession(session, areaId, btnId, langSelId){
   const key=document.getElementById('apiKey').value.trim();
   if(!key){alert('API Key를 번역 탭에 입력해주세요.');return;}
   const btn=document.getElementById(btnId);
@@ -1845,8 +1881,10 @@ async function summarizeSession(session, areaId, btnId){
   const area=document.getElementById(areaId);
   area.innerHTML='<div class="summary-loading">Gemini가 요약 중입니다...</div>';
 
+  const sumLang = document.getElementById(langSelId)?.value || 'ko';
+  const sumLangName = langName[sumLang] || '한국어';
   const fullText=buildFullText(session, {summary:false});   // 요약 만들 때는 기존 요약 제외
-  const prompt=`다음은 실시간 번역된 회의 내용입니다. 아래 항목으로 한국어 회의록을 작성해주세요.
+  const prompt=`다음은 실시간 번역된 회의 내용입니다. 아래 항목으로 ${sumLangName} 회의록을 작성해주세요. 항목 제목을 포함해 전체를 ${sumLangName}로 작성하세요.
 
 ## 📌 핵심 요약 (3~5줄)
 ## ✅ Action Items
@@ -1880,7 +1918,7 @@ ${fullText.slice(0,8000)}`;
   btn.disabled=false;
 }
 
-function summarizeCurrent(){summarizeSession(currentSession,'summaryArea','summarizeBtn');}
+function summarizeCurrent(){summarizeSession(currentSession,'summaryArea','summarizeBtn','summaryLang');}
 
 // ── 모달 ──
 let editMode = false;
@@ -2048,7 +2086,7 @@ function cancelEdit(){
 
 function summarizeModal(){
   if(!modalSession)return;
-  summarizeSession(modalSession,'modalSummaryArea','modalSumBtn');
+  summarizeSession(modalSession,'modalSummaryArea','modalSumBtn','summaryLangModal');
 }
 
 function closeModal(){
