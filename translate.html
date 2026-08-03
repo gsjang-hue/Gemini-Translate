@@ -2,6 +2,11 @@
 <!DOCTYPE html>
 <!--
   Gemini Live Translate
+  v6.0  2026.08.01  다국어 번역 지원 — 회의 모드는 원문/번역 언어를 각각
+                    독립 선택(한국어·영어·일본어·중국어·스페인어·독일어·
+                    프랑스어), 대화 모드는 "내 언어"/"상대방 언어"로 일반화해
+                    한국어가 없는 조합(예: 프랑스어↔독일어)도 가능해짐.
+                    AI 요약도 7개 언어 중 선택 가능
   v5.7  2026.08.01  랜딩 페이지로 가는 홈 링크 추가(설정 패널)
   v5.6  2026.08.01  Light 버전 링크 주소 수정(잘못된 파일명·상대경로 →
                     올바른 절대 URL로 교체)
@@ -363,27 +368,55 @@
     </div>
     <!-- 회의 모드 설정 -->
     <div class="sg" id="sgMeetingLang">
-      <label>회의 언어</label>
-      <select id="meetingLang">
-        <option value="ko|auto">🌐 자동감지 → 한국어</option>
-        <option value="ko|en">영어 → 한국어</option>
-        <option value="ko|zh">중국어 → 한국어</option>
-        <option value="ko|ja">일본어 → 한국어</option>
+      <label>원문 언어</label>
+      <select id="srcLang">
+        <option value="auto">🌐 자동감지</option>
+        <option value="ko">한국어</option>
+        <option value="en">영어</option>
+        <option value="ja">일본어</option>
+        <option value="zh">중국어</option>
+        <option value="es">스페인어</option>
+        <option value="de">독일어</option>
+        <option value="fr">프랑스어</option>
+      </select>
+      <label style="margin-top:8px;">번역 언어</label>
+      <select id="dstLang">
+        <option value="ko" selected>한국어</option>
+        <option value="en">영어</option>
+        <option value="ja">일본어</option>
+        <option value="zh">중국어</option>
+        <option value="es">스페인어</option>
+        <option value="de">독일어</option>
+        <option value="fr">프랑스어</option>
       </select>
     </div>
     <!-- 대화 모드 설정 -->
     <div class="sg hidden" id="sgConvLang">
-      <label>상대방 언어</label>
-      <select id="convLang">
+      <label>내 언어</label>
+      <select id="langA">
+        <option value="ko" selected>한국어</option>
         <option value="en">영어</option>
-        <option value="zh">중국어</option>
         <option value="ja">일본어</option>
+        <option value="zh">중국어</option>
+        <option value="es">스페인어</option>
+        <option value="de">독일어</option>
+        <option value="fr">프랑스어</option>
+      </select>
+      <label style="margin-top:8px;">상대방 언어</label>
+      <select id="langB">
+        <option value="ko">한국어</option>
+        <option value="en" selected>영어</option>
+        <option value="ja">일본어</option>
+        <option value="zh">중국어</option>
+        <option value="es">스페인어</option>
+        <option value="de">독일어</option>
+        <option value="fr">프랑스어</option>
       </select>
     </div>
     <a class="manual-link" href="gemini_translate_manual.pdf" target="_blank" rel="noopener" title="사용 매뉴얼 (PDF)">📖 사용법</a>
     <a class="manual-link" href="https://gsjang-hue.github.io/Gemini-Translate/translate_light.html" title="비용을 아낀 실험적 텍스트 전용 버전(개발 중)">🟢 Light 버전</a>
     <a class="manual-link" href="https://gsjang-hue.github.io/Gemini-Translate/" title="버전을 비교하고 선택하는 첫 화면으로 이동">🏠 홈</a>
-    <div class="version-tag">v5.7 · 2026.08.01<br><span id="costLabel" style="font-size:9px;color:#0a84ff;"></span></div>
+    <div class="version-tag">v6.0 · 2026.08.01<br><span id="costLabel" style="font-size:9px;color:#0a84ff;"></span></div>
   </div>
 
   <!-- 대화 모드 안내 배너 -->
@@ -439,6 +472,15 @@
       <div class="name" id="curName">세션 없음</div>
       <div class="meta" id="curMeta">번역 탭에서 세션명을 입력하고 시작하세요</div>
       <div class="action-row" id="curActions" style="display:none">
+        <select id="summaryLang" style="font-size:12px; padding:4px 6px; border-radius:6px; background:#1c1c1e; color:#ccc; border:0.5px solid #333;">
+          <option value="ko" selected>한국어 요약</option>
+          <option value="en">영어 요약</option>
+          <option value="ja">일본어 요약</option>
+          <option value="zh">중국어 요약</option>
+          <option value="es">스페인어 요약</option>
+          <option value="de">독일어 요약</option>
+          <option value="fr">프랑스어 요약</option>
+        </select>
         <button class="action-btn btn-summarize" id="summarizeBtn" onclick="summarizeCurrent()">AI 요약 생성</button>
         <button class="action-btn btn-download" onclick="downloadCurrent()">📥 다운로드</button>
         <button class="action-btn btn-save" onclick="saveCurrentSession()">💾 저장</button>
@@ -481,6 +523,15 @@
     </div>
     <div class="modal-body" id="modalBody"></div>
     <div class="modal-actions">
+      <select id="summaryLangModal" style="font-size:12px; padding:4px 6px; border-radius:6px; background:#1c1c1e; color:#ccc; border:0.5px solid #333;">
+        <option value="ko" selected>한국어 요약</option>
+        <option value="en">영어 요약</option>
+        <option value="ja">일본어 요약</option>
+        <option value="zh">중국어 요약</option>
+        <option value="es">스페인어 요약</option>
+        <option value="de">독일어 요약</option>
+        <option value="fr">프랑스어 요약</option>
+      </select>
       <button class="action-btn btn-summarize" id="modalSumBtn" onclick="summarizeModal()">AI 요약</button>
       <button class="copy-btn" id="copyModalSumBtn" onclick="copySummary('modalSummaryArea','copyModalSumBtn')" style="padding:8px 12px;">요약 복사</button>
       <button class="action-btn btn-download" onclick="downloadModal()">📥 다운로드</button>
@@ -504,7 +555,7 @@ let audioQueue = [];
 let isPlayingAudio = false;
 const SR=16000;
 const PLAYBACK_SR=24000;
-const langName={ko:'한국어',en:'영어',ja:'일본어',zh:'중국어'};
+const langName={ko:'한국어',en:'영어',ja:'일본어',zh:'중국어',es:'스페인어',de:'독일어',fr:'프랑스어'};
 const PARA_GAP=2500;
 
 // 현재 세션 데이터
@@ -547,8 +598,13 @@ function ts(){return new Date().toTimeString().slice(0,8);}
 
 // 세션의 lang 문자열('ko|en','conv|en','ko|auto')을 사람이 읽는 표기로 변환
 function langPairLabel(langStr){
-  const[a,b]=(langStr||'ko|auto').split('|');
-  if(a==='conv') return '한국어 ↔ '+(langName[b]||b)+' (대화)';
+  const parts=(langStr||'ko|auto').split('|');
+  if(parts[0]==='conv'){
+    const [,A,B] = parts;   // 'conv|A|B' — 예전 'conv|B'(내 언어=한국어 가정) 형식도 함께 지원
+    if(B===undefined) return '한국어 ↔ '+(langName[A]||A)+' (대화)';
+    return (langName[A]||A)+' ↔ '+(langName[B]||B)+' (대화)';
+  }
+  const[a,b]=parts;
   const s = b==='auto' ? '자동감지' : (langName[b]||b);
   return s+' → '+(langName[a]||a);
 }
@@ -1017,12 +1073,14 @@ function updateConvDiag(){
   const el = document.getElementById('convDiag');
   if(!el) return;
   if(!convMode){ el.textContent=''; return; }
-  const fl = document.getElementById('convLang')?.value || 'en';
+  const la = document.getElementById('langA')?.value || 'ko';
+  const lb = document.getElementById('langB')?.value || 'en';
+  const aname = langName[la]||la, bname = langName[lb]||lb;
   const up = (ws && ws.readyState===1) ? '✓' : '✕';
   const dn = (ws2 && ws2.readyState===1) ? '✓' : '✕';
   const errRecent = lastParseError && (Date.now()-lastParseErrorAt) < 10000;
   const errTag = errRecent ? (' · ⚠ '+lastParseError) : '';
-  el.textContent = '한국어→'+(langName[fl]||fl)+' '+up+' / '+(langName[fl]||fl)+'→한국어 '+dn+errTag;
+  el.textContent = aname+'→'+bname+' '+up+' / '+bname+'→'+aname+' '+dn+errTag;
   el.style.color = (up!=='✓' || dn!=='✓' || errRecent) ? '#f0c674' : '#4a7a4a';
   if(errRecent) el.style.color = '#ff453a';
 }
@@ -1271,7 +1329,7 @@ let audioStreamEndSent = true;
 // 방향별 타겟 언어와 최근 감지된 입력 언어를 기록해, 서로 같을 때는
 // 그 방향의 오디오 재생 자체를 걸러낸다(텍스트는 그대로 둠).
 let wsTargetLang = '';
-const ws2TargetLang = 'ko';
+let ws2TargetLang = 'ko';   // 대화 모드 시작 시 langA 값으로 갱신됨
 let wsInputLang = '';
 let ws2InputLang = '';  // 세션 시작 직후는 아직 보낸 적도 없고 보낼 이유도 없는 상태
 let lastServerMsgAt = 0;        // 마지막으로 서버 응답을 받은 시각
@@ -1446,10 +1504,14 @@ function stopPlayback(){
 function saveSettings(){
   const key = document.getElementById('apiKey').value.trim();
   if(key) localStorage.setItem('gt_apikey', key);
-  const m = document.getElementById('meetingLang')?.value;
-  const cv = document.getElementById('convLang')?.value;
-  if(m)  localStorage.setItem('gt_meetingLang', m);
-  if(cv) localStorage.setItem('gt_convLang', cv);
+  const sl = document.getElementById('srcLang')?.value;
+  const dl = document.getElementById('dstLang')?.value;
+  const la = document.getElementById('langA')?.value;
+  const lb = document.getElementById('langB')?.value;
+  if(sl) localStorage.setItem('gt_srcLang', sl);
+  if(dl) localStorage.setItem('gt_dstLang', dl);
+  if(la) localStorage.setItem('gt_langA', la);
+  if(lb) localStorage.setItem('gt_langB', lb);
 }
 
 function loadSettings(){
@@ -1459,8 +1521,10 @@ function loadSettings(){
     const s=document.getElementById(id);
     if(s && val && [...s.options].some(o=>o.value===val)) s.value=val;
   };
-  setSel('meetingLang', localStorage.getItem('gt_meetingLang'));
-  setSel('convLang',    localStorage.getItem('gt_convLang'));
+  setSel('srcLang', localStorage.getItem('gt_srcLang'));
+  setSel('dstLang', localStorage.getItem('gt_dstLang'));
+  setSel('langA',   localStorage.getItem('gt_langA'));
+  setSel('langB',   localStorage.getItem('gt_langB'));
   const fs = parseInt(localStorage.getItem('gt_fontsize')||'15',10);
   if(fs>=11 && fs<=26) applyFont(fs);
   if(localStorage.getItem('gt_mode')==='1' && !convMode) toggleMode();
@@ -1508,8 +1572,8 @@ function updateCtrlSession(){
     const[dst]=currentSession.lang.split('|');
     el.textContent = currentSession.name + ' · ' + (langName[dst]||dst);
   } else {
-    const val = document.getElementById('meetingLang')?.value || 'ko|auto';
-    const[dst,src]=val.split('|');
+    const src = document.getElementById('srcLang')?.value || 'auto';
+    const dst = document.getElementById('dstLang')?.value || 'ko';
     const srcL = src==='auto'?'자동':langName[src]||src;
     el.textContent = srcL+' → '+(langName[dst]||dst);
   }
@@ -1517,23 +1581,26 @@ function updateCtrlSession(){
 
 function updateLabels(){
   if(convMode){
-    const fl = document.getElementById('convLang')?.value || 'en';
-    const fname = langName[fl]||fl;
+    const la = document.getElementById('langA')?.value || 'ko';
+    const lb = document.getElementById('langB')?.value || 'en';
+    const aname = langName[la]||la, bname = langName[lb]||lb;
     document.getElementById('srcLabel').textContent = '원문 (자동감지)';
-    document.getElementById('dstLabel').textContent = '번역 (한국어↔'+fname+')';
+    document.getElementById('dstLabel').textContent = '번역 ('+aname+'↔'+bname+')';
     const banner = document.getElementById('convBanner');
-    if(banner) banner.textContent = '🗣 대화 모드 — 한국어 ↔ '+fname+' 음성 통역 중';
+    if(banner) banner.textContent = '🗣 대화 모드 — '+aname+' ↔ '+bname+' 음성 통역 중';
   } else {
-    const val = document.getElementById('meetingLang')?.value || 'ko|auto';
-    const[dst,src]=val.split('|');
+    const src = document.getElementById('srcLang')?.value || 'auto';
+    const dst = document.getElementById('dstLang')?.value || 'ko';
     const srcLabel = src==='auto' ? '자동감지 (다국어)' : (langName[src]||src);
     document.getElementById('srcLabel').textContent='원문 ('+srcLabel+')';
     document.getElementById('dstLabel').textContent='번역 ('+(langName[dst]||dst)+')';
   }
   updateCtrlSession();
 }
-document.getElementById('meetingLang')?.addEventListener('change', ()=>{ saveSettings(); updateLabels(); });
-document.getElementById('convLang')?.addEventListener('change', ()=>{ saveSettings(); updateLabels(); });
+document.getElementById('srcLang')?.addEventListener('change', ()=>{ saveSettings(); updateLabels(); });
+document.getElementById('dstLang')?.addEventListener('change', ()=>{ saveSettings(); updateLabels(); });
+document.getElementById('langA')?.addEventListener('change', ()=>{ saveSettings(); updateLabels(); });
+document.getElementById('langB')?.addEventListener('change', ()=>{ saveSettings(); updateLabels(); });
 updateLabels();
 loadSettings();
 updateCostLabel();
@@ -1747,7 +1814,7 @@ function openWS(key, targetLang, isEcho, onMsg, assignTo){
         showNotice('상대방 → 한국어 방향이 끊겼습니다 ('+ev.code+') '+(ev.reason||'')+' — 되살리는 중 ('+ws2Tries+'/'+MAX_RECONNECT+')', 'warn');
         setTimeout(()=>{
           if(!convMode || !currentKey) return;
-          ws2 = openWS(currentKey, 'ko', false, parseConvReverse, 'ws2');
+          ws2 = openWS(currentKey, ws2TargetLang, false, parseConvReverse, 'ws2');
         }, Math.min(1000*ws2Tries, 4000));
       } else if(convMode){
         showNotice('상대방 → 한국어 방향을 복구하지 못했습니다 ('+ev.code+') '+(ev.reason||'')+'. 중지 후 다시 시작해 주세요.', 'danger');
@@ -1791,7 +1858,7 @@ function reconnectSession(){
   if(ws){ try{ws.close(1000);}catch(_){} ws=null; }
   if(ws2){ try{ws2.close(1000);}catch(_){} ws2=null; }
   ws = openWS(currentKey, currentTargetLang, false, parse, 'ws');
-  if(convMode) ws2 = openWS(currentKey, 'ko', false, parseConvReverse, 'ws2');
+  if(convMode) ws2 = openWS(currentKey, ws2TargetLang, false, parseConvReverse, 'ws2');
 }
 
 async function parseConvReverse(e){
@@ -1836,11 +1903,10 @@ async function startTranslation(){
 
   let targetLang, sessionName;
   if(convMode){
-    targetLang = document.getElementById('convLang').value;
+    targetLang = document.getElementById('langB').value;   // ws(내→상대) 방향의 타겟
     sessionName = '대화 ' + dateStr();
   } else {
-    const[tl] = document.getElementById('meetingLang').value.split('|');
-    targetLang = tl;
+    targetLang = document.getElementById('dstLang').value;
     sessionName = document.getElementById('sessionName').value.trim() || ('세션 '+dateStr());
   }
   updateLabels();
@@ -1895,7 +1961,7 @@ async function startTranslation(){
       name: currentSessionName,
       startTime: new Date().toISOString(),
       startTimeStr: dateStr(),
-      lang: convMode ? ('conv|'+document.getElementById('convLang').value) : (document.getElementById('meetingLang')?.value||'ko|auto'),
+      lang: convMode ? ('conv|'+document.getElementById('langA').value+'|'+document.getElementById('langB').value) : (document.getElementById('dstLang')?.value+'|'+(document.getElementById('srcLang')?.value||'auto')),
       src:[], dst:[], summary:'', durationSec:0
     };
     if(!hasExisting){
@@ -1931,14 +1997,16 @@ async function startTranslation(){
   document.getElementById('startBtn').disabled = true;
 
   if(convMode){
-    const fl = document.getElementById('convLang').value;
+    const la = document.getElementById('langA').value;   // 내 언어
+    const lb = document.getElementById('langB').value;   // 상대방 언어
     // echo=false 필수: true면 이미 대상 언어인 발화도 되읽어서 음성이 2중으로 겹침
     // 두 세션을 동시에 열면 서버가 한쪽을 거부하는 경우가 있어 시차를 둔다
-    wsTargetLang = fl;
-    ws  = openWS(key, fl,   false, parse,            'ws');   // 내 한국어 → 외국어 음성
+    wsTargetLang = lb;
+    ws2TargetLang = la;
+    ws  = openWS(key, lb,   false, parse,            'ws');   // 내(A) → 상대(B) 음성
     setTimeout(()=>{
       if(!convMode || !currentKey || !currentSession) return;
-      ws2 = openWS(key, 'ko', false, parseConvReverse, 'ws2'); // 상대 외국어 → 한국어 음성
+      ws2 = openWS(key, la, false, parseConvReverse, 'ws2'); // 상대(B) → 나(A) 음성
       updateConvDiag();
     }, 900);
   } else {
@@ -2290,7 +2358,7 @@ async function copySummary(areaId, btnId){
 }
 
 // ── AI 요약 ──
-async function summarizeSession(session, areaId, btnId){
+async function summarizeSession(session, areaId, btnId, langSelId){
   const key=document.getElementById('apiKey').value.trim();
   if(!key){alert('API Key를 번역 탭에 입력해주세요.');return;}
   const btn=document.getElementById(btnId);
@@ -2298,8 +2366,10 @@ async function summarizeSession(session, areaId, btnId){
   const area=document.getElementById(areaId);
   area.innerHTML='<div class="summary-loading">Gemini가 요약 중입니다...</div>';
 
+  const sumLang = document.getElementById(langSelId)?.value || 'ko';
+  const sumLangName = langName[sumLang] || '한국어';
   const fullText=buildFullText(session, {summary:false});   // 요약 만들 때는 기존 요약 제외
-  const prompt=`다음은 실시간 번역된 회의 내용입니다. 아래 항목으로 한국어 회의록을 작성해주세요.
+  const prompt=`다음은 실시간 번역된 회의 내용입니다. 아래 항목으로 ${sumLangName} 회의록을 작성해주세요. 항목 제목을 포함해 전체를 ${sumLangName}로 작성하세요.
 
 ## 📌 핵심 요약 (3~5줄)
 ## ✅ Action Items
@@ -2333,7 +2403,7 @@ ${fullText.slice(0,8000)}`;
   btn.disabled=false;
 }
 
-function summarizeCurrent(){summarizeSession(currentSession,'summaryArea','summarizeBtn');}
+function summarizeCurrent(){summarizeSession(currentSession,'summaryArea','summarizeBtn','summaryLang');}
 
 // ── 모달 ──
 let editMode = false;
@@ -2501,7 +2571,7 @@ function cancelEdit(){
 
 function summarizeModal(){
   if(!modalSession)return;
-  summarizeSession(modalSession,'modalSummaryArea','modalSumBtn');
+  summarizeSession(modalSession,'modalSummaryArea','modalSumBtn','summaryLangModal');
 }
 
 function closeModal(){
