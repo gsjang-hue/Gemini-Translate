@@ -2,6 +2,9 @@
 <!DOCTYPE html>
 <!--
   Gemini Live Translate
+  v6.1  2026.08.01  AI 요약을 여러 언어로 생성하면 기존 언어 요약이
+                    사라지지 않고 함께 쌓여서 표시됨(언어별로 구분 표시).
+                    다운로드·복사·모달에도 전부 반영. 예전 저장 세션과 호환
   v6.0  2026.08.01  다국어 번역 지원 — 회의 모드는 원문/번역 언어를 각각
                     독립 선택(한국어·영어·일본어·중국어·스페인어·독일어·
                     프랑스어), 대화 모드는 "내 언어"/"상대방 언어"로 일반화해
@@ -416,7 +419,7 @@
     <a class="manual-link" href="gemini_translate_manual.pdf" target="_blank" rel="noopener" title="사용 매뉴얼 (PDF)">📖 사용법</a>
     <a class="manual-link" href="https://gsjang-hue.github.io/Gemini-Translate/translate_light.html" title="비용을 아낀 실험적 텍스트 전용 버전(개발 중)">🟢 Light 버전</a>
     <a class="manual-link" href="https://gsjang-hue.github.io/Gemini-Translate/" title="버전을 비교하고 선택하는 첫 화면으로 이동">🏠 홈</a>
-    <div class="version-tag">v6.0 · 2026.08.01<br><span id="costLabel" style="font-size:9px;color:#0a84ff;"></span></div>
+    <div class="version-tag">v6.1 · 2026.08.01<br><span id="costLabel" style="font-size:9px;color:#0a84ff;"></span></div>
   </div>
 
   <!-- 대화 모드 안내 배너 -->
@@ -2271,8 +2274,15 @@ function buildFullText(session, opts){
   txt+='---\n\n';
 
   // AI 요약이 있으면 맨 앞에 넣는다 — 문서를 열자마자 결론부터 보이게
-  if(includeSummary && session.summary && session.summary.trim()){
-    txt+='## AI 요약\n\n'+demoteHeadings(session.summary.trim())+'\n\n';
+  const summMap = summariesOf(session);
+  const summLangs = Object.keys(summMap);
+  if(includeSummary && summLangs.length){
+    summLangs.forEach(lang=>{
+      const t = summMap[lang];
+      if(t && t.trim()){
+        txt+='## AI 요약 ('+(langName[lang]||lang)+')\n\n'+demoteHeadings(t.trim())+'\n\n';
+      }
+    });
     txt+='---\n\n';
   }
 
@@ -2329,10 +2339,15 @@ function downloadModal(){
 async function copySummary(areaId, btnId){
   const area=document.getElementById(areaId);
   if(!area){return;}
-  const box=area.querySelector('.summary-box');
-  if(!box){alert('요약 내용이 없습니다.');return;}
-  // innerHTML의 <br>을 줄바꿈으로, 나머지 태그 제거
-  let raw=box.innerHTML.replace(/<br\s*\/?>/gi,'\n').replace(/<[^>]+>/g,'');
+  const boxes=area.querySelectorAll('.summary-box');
+  if(!boxes.length){alert('요약 내용이 없습니다.');return;}
+  let raw='';
+  boxes.forEach((box,i)=>{
+    let one=box.innerHTML.replace(/<br\s*\/?>/gi,'\n').replace(/<[^>]+>/g,'');
+    const ta0=document.createElement('textarea');
+    ta0.innerHTML=one; one=ta0.value;
+    raw += (i>0?'\n\n':'') + one;
+  });
   // HTML 엔티티 디코딩
   const ta=document.createElement('textarea');
   ta.innerHTML=raw; raw=ta.value;
@@ -2358,13 +2373,35 @@ async function copySummary(areaId, btnId){
 }
 
 // ── AI 요약 ──
+// 언어별 요약을 쌓아서 보여준다. session.summaries = { ko: '...', en: '...' }
+// 예전 세션은 session.summary(문자열) 하나만 있는데, 그건 한국어 요약으로 간주해 옮겨준다.
+function summariesOf(session){
+  if(session.summaries) return session.summaries;
+  return session.summary ? { ko: session.summary } : {};
+}
+function renderSummaries(session, areaId){
+  const area=document.getElementById(areaId);
+  if(!area) return;
+  const map = summariesOf(session);
+  const langs = Object.keys(map);
+  if(!langs.length){ area.innerHTML=''; return; }
+  area.innerHTML = langs.map(lang => {
+    const name = langName[lang] || lang;
+    const text = map[lang];
+    return '<div style="font-size:11px;color:#555;margin:12px 0 4px;">'+name+' 요약</div>'
+         + '<div class="summary-box">'+text.replace(/</g,'&lt;').replace(/\n/g,'<br>')+'</div>';
+  }).join('');
+}
+
 async function summarizeSession(session, areaId, btnId, langSelId){
   const key=document.getElementById('apiKey').value.trim();
   if(!key){alert('API Key를 번역 탭에 입력해주세요.');return;}
   const btn=document.getElementById(btnId);
   btn.disabled=true; btn.textContent='요약 중...';
   const area=document.getElementById(areaId);
-  area.innerHTML='<div class="summary-loading">Gemini가 요약 중입니다...</div>';
+  // 기존에 쌓인 다른 언어 요약이 있으면 그건 그대로 두고, 이번 언어 자리에만 로딩 표시를 추가한다
+  if(!Object.keys(summariesOf(session)).length) area.innerHTML='<div class="summary-loading">Gemini가 요약 중입니다...</div>';
+  else area.innerHTML += '<div class="summary-loading">Gemini가 요약 중입니다...</div>';
 
   const sumLang = document.getElementById(langSelId)?.value || 'ko';
   const sumLangName = langName[sumLang] || '한국어';
@@ -2388,9 +2425,11 @@ ${fullText.slice(0,8000)}`;
     if(!gRes.ok){const errData=await gRes.json();throw new Error(errData.error?.message||'API 오류 '+gRes.status);}
     const gData=await gRes.json();
     const summary=gData.candidates?.[0]?.content?.parts?.[0]?.text||'요약 실패';
-    area.innerHTML='<div class="summary-box">'+summary.replace(/</g,'&lt;').replace(/\n/g,'<br>')+'</div>';
+    if(!session.summaries) session.summaries = summariesOf(session);   // 예전 단일 요약을 옮겨 담는다
+    session.summaries[sumLang] = summary;
+    session.summary = summary;   // 하위 호환: 가장 최근 요약을 계속 여기에도 반영
+    renderSummaries(session, areaId);
     if(session===currentSession){
-      currentSession.summary=summary;
       // 현재 세션 복사 버튼 표시
       const copyRow=document.getElementById('summaryCopyRow');
       if(copyRow) copyRow.style.display='block';
@@ -2473,9 +2512,10 @@ function renderModalBody(){
   body.innerHTML+=html;
 
   // 기존 요약 있으면 표시
-  if(session.summary){
+  if(Object.keys(summariesOf(session)).length){
     body.innerHTML+='<div style="font-size:11px;color:#555;margin-top:16px;margin-bottom:6px;display:flex;align-items:center;justify-content:space-between;"><span>AI 요약</span><button class="copy-btn" id="copyModalSumBtn2" onclick="copySummary(\'modalSummaryArea\',\'copyModalSumBtn2\')">복사</button></div>';
-    body.innerHTML+='<div class="summary-box" id="modalSummaryArea">'+session.summary.replace(/</g,'&lt;').replace(/\n/g,'<br>')+'</div>';
+    body.innerHTML+='<div id="modalSummaryArea"></div>';
+    renderSummaries(session, 'modalSummaryArea');
   } else {
     body.innerHTML+='<div id="modalSummaryArea"></div>';
   }
