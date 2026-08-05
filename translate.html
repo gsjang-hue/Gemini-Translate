@@ -2,6 +2,8 @@
 <!DOCTYPE html>
 <!--
   Gemini Live Translate
+  v6.2  2026.08.01  방문 통계(GoatCounter) 스크립트 추가 — 쿠키 없이 방문
+                    횟수·인원만 집계. 코드는 가입 후 별도 교체 필요
   v6.1  2026.08.01  AI 요약을 여러 언어로 생성하면 기존 언어 요약이
                     사라지지 않고 함께 쌓여서 표시됨(언어별로 구분 표시).
                     다운로드·복사·모달에도 전부 반영. 예전 저장 세션과 호환
@@ -327,6 +329,8 @@
     .divider { width: 100%; height: 0.5px; }
   }
 </style>
+<!-- 방문 통계(GoatCounter, 쿠키 없음) -->
+<script data-goatcounter="https://gsjang.goatcounter.com/count" async src="//gc.zgo.at/count.js"></script>
 </head>
 <body>
 
@@ -419,7 +423,7 @@
     <a class="manual-link" href="gemini_translate_manual.pdf" target="_blank" rel="noopener" title="사용 매뉴얼 (PDF)">📖 사용법</a>
     <a class="manual-link" href="https://gsjang-hue.github.io/Gemini-Translate/translate_light.html" title="비용을 아낀 실험적 텍스트 전용 버전(개발 중)">🟢 Light 버전</a>
     <a class="manual-link" href="https://gsjang-hue.github.io/Gemini-Translate/" title="버전을 비교하고 선택하는 첫 화면으로 이동">🏠 홈</a>
-    <div class="version-tag">v6.1 · 2026.08.01<br><span id="costLabel" style="font-size:9px;color:#0a84ff;"></span></div>
+    <div class="version-tag">v6.2 · 2026.08.01<br><span id="costLabel" style="font-size:9px;color:#0a84ff;"></span></div>
   </div>
 
   <!-- 대화 모드 안내 배너 -->
