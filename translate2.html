@@ -2,6 +2,10 @@
 <!DOCTYPE html>
 <!--
   Gemini Live Translate
+  v6.6  2026.08.01  발언 추천을 다시 누르면 이전 추천이 사라지던 문제 수정 —
+                    AI 요약과 같은 방식으로 누적. 최신 추천이 위로, 이전
+                    추천들은 구분선 아래로 계속 남음(세션 이어쓰기 시 유지,
+                    새 세션 시작 시 초기화)
   v6.5  2026.08.01  "💡 발언 추천" 기능 추가 — 버튼을 누른 시점까지의 맥락을
                     보고 한국어·영어로 다음 발언을 추천. 회의 전체를 매번
                     다시 안 보내도록 롤링 요약 방식 사용(이전 요약 + 그
@@ -271,6 +275,9 @@
   .suggest-body .sg-lang { font-size:10px; color:#8a7a4a; margin:8px 0 3px; }
   .suggest-body .sg-text { color:#f0e0b0; background:#00000022; border-radius:8px; padding:8px 10px; }
   .suggest-loading { color:#8a7a4a; font-size:13px; padding:4px 0; }
+  .sg-entry { padding:4px 0; }
+  .sg-time { font-size:10px; color:#6a5a2a; margin-bottom:4px; }
+  .sg-divider { border:none; border-top:0.5px solid #3a3010; margin:14px 0; }
   .save-hint { font-size:10px; color:#4a7a4a; opacity:0.35; transition:opacity 0.3s; white-space:nowrap; }
   .conv-diag { font-size:10px; color:#4a7a4a; white-space:nowrap; }
   .storage-label { font-size:10px; color:#555; font-weight:400; letter-spacing:0; text-transform:none; }
@@ -396,7 +403,7 @@
     </div>
     <div class="sg" id="sgProfile">
       <label>💡 발언 추천용 — 내 프로필 (한 번만 써두면 계속 재사용됩니다)</label>
-      <textarea id="myProfile" rows="2" placeholder="예: 미래에셋증권 PI본부 담당자. 대체투자(PE·Pre-IPO·부동산) 심사 담당. 직설적이고 논리적인 화법 선호." style="width:100%; background:#1c1c1e; color:#eee; border:0.5px solid #333; border-radius:8px; padding:8px; font-size:13px; resize:vertical;"></textarea>
+      <textarea id="myProfile" rows="2" placeholder="예: 대형 증권사 PI부문 대체투자 담당자. 대체투자(PE·Pre-IPO·부동산) 심사 담당. 직설적이고 논리적인 화법 선호." style="width:100%; background:#1c1c1e; color:#eee; border:0.5px solid #333; border-radius:8px; padding:8px; font-size:13px; resize:vertical;"></textarea>
     </div>
     <div class="sg" id="sgMeetingInfo">
       <label>💡 발언 추천용 — 이번 회의 정보 · 내 입장 (회의마다 갱신)</label>
@@ -452,7 +459,7 @@
     <a class="manual-link" href="gemini_translate_manual.pdf" target="_blank" rel="noopener" title="사용 매뉴얼 (PDF)">📖 사용법</a>
     <a class="manual-link" href="https://gsjang-hue.github.io/Gemini-Translate/translate_light.html" title="비용을 아낀 실험적 텍스트 전용 버전(개발 중)">🟢 Light 버전</a>
     <a class="manual-link" href="https://gsjang-hue.github.io/Gemini-Translate/" title="버전을 비교하고 선택하는 첫 화면으로 이동">🏠 홈</a>
-    <div class="version-tag">v6.5 · 2026.08.01<br><span id="costLabel" style="font-size:9px;color:#0a84ff;"></span></div>
+    <div class="version-tag">v6.6 · 2026.08.01<br><span id="costLabel" style="font-size:9px;color:#0a84ff;"></span></div>
   </div>
 
   <!-- 대화 모드 안내 배너 -->
@@ -889,6 +896,7 @@ const refinedSegs = new Set();
 let refineQueue = [];
 let meetingRollingSummary = '';   // 발언 추천용 롤링 요약 — 매번 전체를 다시 안 보내기 위한 누적 요약
 let suggestSegCount = 0;          // 지금까지 롤링 요약에 반영된 문단 수(이후만 "새 내용"으로 취급)
+let suggestHistory = [];          // 이번 세션에서 받은 추천 발언 전부 — 최신이 위로, 이전 것도 계속 보임
 let refineBusy = false;
 
 // 문장이 끝났는지 판정 — 영어·한국어(. ! ?)와 중국어·일본어(。！？)를 함께 본다.
@@ -1610,7 +1618,10 @@ function loadSettings(){
   setSel('langB',   localStorage.getItem('gt_langB'));
   const profileEl = document.getElementById('myProfile');
   const meetingInfoEl = document.getElementById('meetingInfo');
-  if(profileEl) profileEl.value = localStorage.getItem('gt_myProfile') || '';
+  // 저장된 값이 아직 없으면(처음 켤 때) 확정하신 프로필을 기본으로 채워둔다.
+  // 한 번 저장(수정)하면 그 뒤로는 그 저장값이 우선한다(빈 값으로 지워도 존중).
+  const DEFAULT_PROFILE = '미래에셋증권 PI(고유계정투자)부문 대체투자본부장. PE 블라인드펀드·Pre-IPO·부동산/인프라·FoF 전반의 투자심의·이사회 보고·사외이사 관계관리를 총괄하며, 홍콩법인(MASHK) RMC 위원도 겸직 중. 숫자와 근거 중심의 직설적이고 논리적인 화법을 선호하고, 막연한 낙관론이나 논리적 비약에는 명확하게 반박하는 스타일.';
+  if(profileEl) profileEl.value = localStorage.getItem('gt_myProfile') ?? DEFAULT_PROFILE;
   if(meetingInfoEl) meetingInfoEl.value = localStorage.getItem('gt_meetingInfo') || '';
   const fs = parseInt(localStorage.getItem('gt_fontsize')||'15',10);
   if(fs>=11 && fs<=26) applyFont(fs);
@@ -2046,7 +2057,7 @@ async function startTranslation(){
   pendingCandidateLen=null; pendingSince=null;
   pendingSilenceBreak=false; lastSrcEndedSentence=true;
   refinedSegs.clear(); refineQueue=[]; refineBusy=false;
-  if(!keepSession){ meetingRollingSummary = ''; suggestSegCount = 0; closeSuggestPanel(); }   // 이어쓰기면 발언추천 맥락도 유지
+  if(!keepSession){ meetingRollingSummary = ''; suggestSegCount = 0; suggestHistory = []; closeSuggestPanel(); }   // 이어쓰기면 발언추천 맥락도 유지
   longNoticeShown=false;
   hideNotice();
   checkStorage();   // 시작 전에 저장 공간을 미리 확인
@@ -2496,6 +2507,21 @@ function closeSuggestPanel(){
   document.getElementById('suggestPanel')?.classList.add('hidden');
 }
 
+// 최신 추천이 위로 오고, 이전 추천들은 구분선 아래로 계속 남는다(사라지지 않음)
+function renderSuggestHistory(){
+  const body = document.getElementById('suggestBody');
+  if(!body) return;
+  if(!suggestHistory.length){ body.innerHTML=''; return; }
+  body.innerHTML = suggestHistory.slice().reverse().map((item, idx)=>{
+    const latestTag = idx===0 ? ' · 최신' : '';
+    return '<div class="sg-entry">'
+      + '<div class="sg-time">'+item.time+latestTag+'</div>'
+      + '<div class="sg-lang">🇰🇷 한국어</div><div class="sg-text">'+(item.ko||'').replace(/</g,'&lt;')+'</div>'
+      + '<div class="sg-lang">🇺🇸 영어</div><div class="sg-text">'+(item.en||'').replace(/</g,'&lt;')+'</div>'
+      + '</div>';
+  }).join('<hr class="sg-divider">');
+}
+
 function buildTranscriptDelta(session, fromSegCount){
   const segs = pairSegments(session);
   const newSegs = segs.slice(fromSegCount);
@@ -2522,7 +2548,9 @@ async function suggestReply(){
   const body = document.getElementById('suggestBody');
   btn.disabled = true;
   panel.classList.remove('hidden');
-  body.innerHTML = '<div class="suggest-loading">맥락을 살펴보는 중...</div>';
+  // 로딩 표시는 기존 기록 위에 얹기만 하고, 이전 추천은 그대로 둔다(사라지지 않게)
+  renderSuggestHistory();
+  body.insertAdjacentHTML('afterbegin', '<div class="suggest-loading" id="suggestLoadingRow">맥락을 살펴보는 중...</div>');
 
   const profile = document.getElementById('myProfile')?.value.trim() || '(제공되지 않음)';
   const meetingInfo = document.getElementById('meetingInfo')?.value.trim() || '(제공되지 않음)';
@@ -2578,11 +2606,15 @@ JSON 스키마에 맞춰서만 답하세요.`;
     meetingRollingSummary = result.updated_summary || meetingRollingSummary;
     suggestSegCount = segCount;
 
-    body.innerHTML =
-      '<div class="sg-lang">🇰🇷 한국어</div><div class="sg-text">'+(result.suggestion_ko||'').replace(/</g,'&lt;')+'</div>'+
-      '<div class="sg-lang">🇺🇸 영어</div><div class="sg-text">'+(result.suggestion_en||'').replace(/</g,'&lt;')+'</div>';
+    suggestHistory.push({
+      time: new Date().toTimeString().slice(0,5),
+      ko: result.suggestion_ko || '',
+      en: result.suggestion_en || '',
+    });
+    renderSuggestHistory();
   }catch(err){
-    body.innerHTML = '<div class="suggest-loading">추천 실패: '+(err?.message||err)+'</div>';
+    document.getElementById('suggestLoadingRow')?.remove();
+    body.insertAdjacentHTML('afterbegin', '<div class="suggest-loading">추천 실패: '+(err?.message||err)+'</div>');
   }
   btn.disabled = false;
 }
